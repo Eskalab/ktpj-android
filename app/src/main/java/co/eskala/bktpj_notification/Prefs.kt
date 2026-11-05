@@ -50,11 +50,30 @@ object Prefs {
     fun getNuPackage(ctx: Context) = sp(ctx).getString("nu_package", DEFAULT_NU_PKG) ?: DEFAULT_NU_PKG
     fun setNuPackage(ctx: Context, v: String) = sp(ctx).edit().putString("nu_package", v).apply()
 
-    fun parseAndSaveConnectionString(ctx: Context, connStr: String): Boolean {
+    fun getTheme(ctx: Context) = sp(ctx).getString("theme", "system") ?: "system"
+    fun setTheme(ctx: Context, v: String) = sp(ctx).edit().putString("theme", v).apply()
+
+    fun getNeonConfig(ctx: Context) =
+        NeonConfig(getNeonHost(ctx), getNeonUser(ctx), getNeonPassword(ctx), getNeonDb(ctx))
+
+    fun saveNeonConfig(ctx: Context, cfg: NeonConfig) {
+        setNeonHost(ctx, cfg.host)
+        setNeonUser(ctx, cfg.user)
+        setNeonPassword(ctx, cfg.password)
+        setNeonDb(ctx, cfg.db)
+    }
+
+    fun hasConnection(ctx: Context) = getNeonHost(ctx).isNotEmpty() && getNeonUser(ctx).isNotEmpty()
+
+    // Se marca al terminar el onboarding (01 → 02 → 03); el permiso se sigue revisando aparte.
+    fun isOnboarded(ctx: Context) = sp(ctx).getBoolean("onboarded", false)
+    fun setOnboarded(ctx: Context, v: Boolean) = sp(ctx).edit().putBoolean("onboarded", v).apply()
+
+    fun parseConnectionString(connStr: String): NeonConfig? {
         return try {
-            val url = connStr.removePrefix("postgresql://").removePrefix("postgres://")
+            val url = connStr.trim().removePrefix("postgresql://").removePrefix("postgres://")
             val atIdx = url.lastIndexOf('@')
-            if (atIdx < 0) return false
+            if (atIdx < 0) return null
             val credentials = url.substring(0, atIdx)
             val rest = url.substring(atIdx + 1)
             val colonIdx = credentials.indexOf(':')
@@ -63,16 +82,27 @@ object Prefs {
             val slashIdx = rest.indexOf('/')
             val host = if (slashIdx >= 0) rest.substring(0, slashIdx) else rest
             val db = if (slashIdx >= 0) rest.substring(slashIdx + 1).substringBefore('?') else "neondb"
-            setNeonHost(ctx, host)
-            setNeonUser(ctx, user)
-            setNeonPassword(ctx, pass)
-            setNeonDb(ctx, db)
-            true
+            if (host.isEmpty() || user.isEmpty()) null else NeonConfig(host, user, pass, db.ifEmpty { "neondb" })
         } catch (e: Exception) {
-            false
+            null
         }
+    }
+
+    fun parseAndSaveConnectionString(ctx: Context, connStr: String): Boolean {
+        val cfg = parseConnectionString(connStr) ?: return false
+        saveNeonConfig(ctx, cfg)
+        return true
     }
 
     fun isConfigured(ctx: Context) =
         getNeonHost(ctx).isNotEmpty() && getNeonUser(ctx).isNotEmpty() && getColumnInbox(ctx).isNotEmpty()
+}
+
+data class NeonConfig(
+    val host: String,
+    val user: String,
+    val password: String,
+    val db: String,
+) {
+    val connectionString get() = "postgresql://$user:$password@$host/$db?sslmode=require"
 }

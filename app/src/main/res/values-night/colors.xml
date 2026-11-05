@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="tablero_bg">#111113</color>
+    <color name="tablero_fg">#F4F4F5</color>
+    <color name="tablero_accent">#FF7A45</color>
+</resources>

@@ -3,6 +3,7 @@ import java.util.Properties
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.compose")
 }
 
 val localProps = Properties().apply {
@@ -44,6 +45,7 @@ android {
     buildFeatures {
         viewBinding = true
         buildConfig = true
+        compose = true
     }
 
     packaging {
@@ -69,4 +71,18 @@ dependencies {
 
     // Lifecycle (lifecycleScope en Activity)
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.3")
+
+    // Revisión periódica de tareas de Claude (skill /spur)
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
+
+    // Compose (rediseño "Tablero")
+    val composeBom = platform("androidx.compose:compose-bom:2024.09.00")
+    implementation(composeBom)
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.ui:ui-tooling-preview")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.activity:activity-compose:1.9.2")
+    debugImplementation("androidx.compose.ui:ui-tooling")
+
+    testImplementation("junit:junit:4.13.2")
 }

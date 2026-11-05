@@ -5,3 +5,6 @@ local.properties
 .idea/
 *.apk
 *.aab
+.kotlin/
+.DS_Store
+*.properties.txt

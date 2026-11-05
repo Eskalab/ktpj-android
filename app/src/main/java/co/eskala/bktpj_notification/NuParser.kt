@@ -5,7 +5,14 @@ data class NuTransaction(
     val amount: String?,
     val merchant: String?,
     val type: String,   // "cargo" | "abono" | "desconocido"
-    val rawText: String
+    val rawText: String,
+    // Solo para bancos con varias cuentas (Davivienda): "TC Crédito 8066", "Ahorros 8204".
+    val account: String? = null,
+    val last4: String? = null,
+    // Id estable del movimiento (p. ej. del SMS) para no duplicarlo si llega dos veces.
+    val messageId: String? = null,
+    // false = solo tarjeta, sin fila en `transactions` (p. ej. depósitos: la tabla no distingue ingresos).
+    val recordTransaction: Boolean = true,
 )
 
 object NuParser {

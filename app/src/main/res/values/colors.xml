@@ -5,4 +5,13 @@
     <color name="nu_purple">#820AD1</color>
     <color name="surface">#F4F5F7</color>
     <color name="white">#FFFFFF</color>
+
+    <!-- Rediseño "Tablero" — espejo de ui/theme/Color.kt para ventana y barras del sistema -->
+    <color name="tablero_bg">#FFFFFF</color>
+    <color name="tablero_fg">#111111</color>
+    <color name="tablero_accent">#CF3F0A</color>
+
+    <!-- Ícono de Spur: fondo fg del tema claro y punto en accent -->
+    <color name="spur_icon_bg">#111111</color>
+    <color name="spur_icon_dot">#CF3F0A</color>
 </resources>
