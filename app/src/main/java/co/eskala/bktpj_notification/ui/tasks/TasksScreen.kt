@@ -28,14 +28,20 @@ import co.eskala.bktpj_notification.ui.components.isToday
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.stateDescription
+import co.eskala.bktpj_notification.ui.theme.KtpjShapes
 import androidx.compose.runtime.setValue
 import co.eskala.bktpj_notification.ui.theme.KtpjDimens
 import co.eskala.bktpj_notification.ui.theme.KtpjTheme
 import co.eskala.bktpj_notification.ui.theme.ThemeMode
 
 /**
- * Tareas por fecha: Atrasadas · Hoy · Próximas · Sin fecha, y abajo las terminadas hoy, tachadas.
- * Tocar la fecha de una tarea abre el calendario.
+ * Tareas en acordeón: Hoy (abierto, ★ primero) · Anteriores (cerrado) · Terminadas hoy (abierto, tachadas)
+ * · Próximos días (cerrado) · Sin fecha (cerrado). Tocar el título abre/cierra; tocar la fecha abre el calendario.
  */
 @Composable
 fun TasksScreen(
@@ -55,10 +61,16 @@ fun TasksScreen(
     val t = KtpjTheme.type
     var editingDate by remember { mutableStateOf<SpurTask?>(null) }
 
-    val overdue = tasks.filter { it.due != null && isOverdue(it.due) }
-    val today = tasks.filter { it.due != null && isToday(it.due) }
+    val overdue = tasks.filter { it.due != null && isOverdue(it.due) }.sortedBy { it.due }
+    val today = tasks.filter { it.due != null && isToday(it.due) }.sortedByDescending { it.priority }
     val upcoming = tasks.filter { it.due != null && !isOverdue(it.due) && !isToday(it.due) }.sortedBy { it.due }
     val noDate = tasks.filter { it.due == null }
+    // Qué secciones están abiertas (se recuerda al girar o volver a la pestaña).
+    var openToday by rememberSaveable { mutableStateOf(true) }
+    var openOverdue by rememberSaveable { mutableStateOf(false) }
+    var openDone by rememberSaveable { mutableStateOf(true) }
+    var openUpcoming by rememberSaveable { mutableStateOf(false) }
+    var openNoDate by rememberSaveable { mutableStateOf(false) }
 
     LazyColumn(
         modifier.fillMaxSize().background(c.bg),
@@ -82,16 +94,33 @@ fun TasksScreen(
             }
         }
 
-        fun section(title: String, list: List<SpurTask>, emptyText: String? = null) {
-            if (list.isEmpty() && emptyText == null) return
+        fun header(title: String, count: Int, open: Boolean, accent: Boolean = false, onToggle: () -> Unit) {
             item(key = "h:$title") {
-                Text(
-                    if (list.isEmpty()) title else "$title · ${list.size}",
-                    style = t.overline,
-                    color = if (title == "ATRASADAS") c.accent else c.muted,
-                    modifier = Modifier.padding(top = 14.dp),
-                )
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(top = 10.dp)
+                        .clip(KtpjShapes.row)
+                        .clickable(role = Role.Button, onClickLabel = if (open) "Cerrar" else "Abrir", onClick = onToggle)
+                        .semantics { heading(); stateDescription = if (open) "Abierta" else "Cerrada" }
+                        .padding(vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        if (count == 0) title else "$title · $count",
+                        style = t.overline,
+                        color = if (accent && count > 0) c.accent else c.muted,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(if (open) "▾" else "▸", style = t.rowTitle, color = c.muted)
+                }
             }
+        }
+
+        fun section(title: String, list: List<SpurTask>, open: Boolean, onToggle: () -> Unit, accent: Boolean = false, emptyText: String? = null) {
+            if (list.isEmpty() && emptyText == null) return
+            header(title, list.size, open, accent, onToggle)
+            if (!open) return
             if (list.isEmpty()) {
                 item(key = "e:$title") { Text(emptyText!!, style = t.secondary, color = c.muted) }
             }
@@ -107,17 +136,15 @@ fun TasksScreen(
             }
         }
 
-        section("ATRASADAS", overdue)
-        section("HOY", today, emptyText = if (tasks.isNotEmpty()) "Nada para hoy." else null)
-        section("PRÓXIMAS", upcoming)
-        section("SIN FECHA", noDate)
-
+        section("HOY", today, openToday, { openToday = !openToday },
+            emptyText = if (tasks.isNotEmpty() || doneToday.isNotEmpty()) "Nada pendiente para hoy." else null)
+        section("ANTERIORES", overdue, openOverdue, { openOverdue = !openOverdue }, accent = true)
         if (doneToday.isNotEmpty()) {
-            item(key = "h:done") {
-                Text("TERMINADAS HOY · ${doneToday.size}", style = t.overline, color = c.muted, modifier = Modifier.padding(top = 18.dp))
-            }
-            items(doneToday, key = { "done:" + it.id }) { DoneTaskRow(it) }
+            header("TERMINADAS HOY", doneToday.size, openDone) { openDone = !openDone }
+            if (openDone) items(doneToday, key = { "done:" + it.id }) { DoneTaskRow(it) }
         }
+        section("PRÓXIMOS DÍAS", upcoming, openUpcoming, { openUpcoming = !openUpcoming })
+        section("SIN FECHA", noDate, openNoDate, { openNoDate = !openNoDate })
     }
 
     editingDate?.let { task ->
