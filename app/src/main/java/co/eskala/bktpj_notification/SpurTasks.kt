@@ -22,11 +22,31 @@ data class SpurTask(
     val due: String?,
     val priority: Boolean = false,   // ★ prioritaria: recordatorio cada hora hasta completarla
     val app: String? = null,         // paquete de la app que abre la tarea (etiqueta "app:<paquete>")
-    val project: TaskProject? = null, // proyecto de KTPJ (opcional)
+    val project: TaskProject? = null, // épica (Project de KTPJ), opcional
+    val key: String? = null,          // ID tipo Jira: LAV-3, o SP-12 sin épica
+    val started: Boolean = false,     // "en curso"
 )
 
-/** Proyecto de KTPJ; [color] en formato "#RRGGBB". */
-data class TaskProject(val id: String, val title: String, val color: String?)
+/**
+ * Épica (Project de KTPJ). [color] "#RRGGBB"; [prefix] de las IDs (LAV); [total]/[done] = tarjetas
+ * no archivadas de la épica y cuántas están hechas (solo vienen al listar épicas).
+ */
+data class TaskProject(
+    val id: String,
+    val title: String,
+    val color: String?,
+    val prefix: String? = null,
+    val total: Int = 0,
+    val done: Int = 0,
+)
+
+/** Tarjeta de una épica: tarea de Spur (se puede actuar) o tarjeta de la web (solo lectura). */
+data class EpicCard(
+    val task: SpurTask,
+    val done: Boolean,
+    val fromSpur: Boolean,
+    val where: String?,   // "KTPJ — Desarrollo · Hecho" para las de la web
+)
 
 /**
  * Tareas pendientes de Claude: se leen de Neon al abrir la app y cada ~15 min en segundo plano.
@@ -44,6 +64,11 @@ object SpurTasks {
     // Franja de recordatorios (hora del teléfono): de 6:00 a.m. a 8:00 p.m.; de noche no se insiste.
     private const val REMIND_FROM_HOUR = 6
     private const val REMIND_UNTIL_HOUR = 20
+
+    /** ★ con fecha de hoy o ya vencida. Sin fecha o con fecha futura: no insiste. */
+    private fun remindsToday(task: SpurTask): Boolean =
+        task.due != null && (co.eskala.bktpj_notification.ui.components.isToday(task.due) ||
+            co.eskala.bktpj_notification.ui.components.isOverdue(task.due))
 
     private fun inReminderHours(): Boolean {
         val h = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
@@ -101,7 +126,8 @@ object SpurTasks {
                         SpurNotifications.showTask(ctx, task, reminder = false)
                         edit.putLong(REMIND_PREFIX + task.id, now)
                     }
-                    task.priority && now - last >= REMIND_EVERY_MS && inReminderHours() -> {
+                    // Recordatorio cada hora solo para ★ de hoy (o atrasadas): las de días siguientes esperan su día.
+                    task.priority && remindsToday(task) && now - last >= REMIND_EVERY_MS && inReminderHours() -> {
                         SpurNotifications.showTask(ctx, task, reminder = true)
                         edit.putLong(REMIND_PREFIX + task.id, now)
                     }
@@ -164,14 +190,25 @@ object SpurTasks {
         val before = _tasks.value.firstOrNull { it.id == id }
         val r = NeonRepository.updateTask(ctx, id, title, description, due, high, app, project?.id)
         if (r.isSuccess) {
+            // Cambió de épica: nuevo ID con el prefijo de la nueva (SP-7 → LAV-4), como en Jira.
+            val newKey = if (before != null && before.project?.id != project?.id) {
+                NeonRepository.assignKey(ctx, id, project?.id).getOrNull() ?: before.key
+            } else before?.key
             _tasks.value = _tasks.value
-                .map { if (it.id == id) it.copy(title = title, description = description, due = due, priority = high, app = app, project = project) else it }
+                .map { if (it.id == id) it.copy(title = title, description = description, due = due, priority = high, app = app, project = project, key = newKey) else it }
                 .sortedByDescending { it.priority }
             if (high && before?.priority != true) {
                 ctx.getSharedPreferences(SEEN_FILE, Context.MODE_PRIVATE).edit()
                     .putLong(REMIND_PREFIX + id, System.currentTimeMillis()).apply()
             }
         }
+        return r
+    }
+
+    /** Empezar (en curso) o volver a pendiente. */
+    suspend fun setStarted(ctx: Context, id: String, started: Boolean): Result<Unit> {
+        val r = NeonRepository.setTaskStarted(ctx, id, started)
+        if (r.isSuccess) _tasks.value = _tasks.value.map { if (it.id == id) it.copy(started = started) else it }
         return r
     }
 

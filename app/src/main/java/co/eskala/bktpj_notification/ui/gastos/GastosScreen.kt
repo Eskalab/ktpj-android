@@ -34,6 +34,9 @@ fun GastosScreen(
     onRetry: (String) -> Unit,
     onAddManual: () -> Unit,
     modifier: Modifier = Modifier,
+    fixed: Set<String> = emptySet(),
+    onToggleFixed: ((co.eskala.bktpj_notification.Capture) -> Unit)? = null,
+    onOpenBalance: () -> Unit = {},
 ) {
     val c = KtpjTheme.colors
     HistoryScreen(
@@ -42,6 +45,8 @@ fun GastosScreen(
         onRetry = onRetry,
         modifier = modifier,
         title = "Gastos",
+        fixed = fixed,
+        onToggleFixed = onToggleFixed,
         header = {
             Column(verticalArrangement = Arrangement.spacedBy(KtpjDimens.cardGap)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(KtpjDimens.cardGap)) {
@@ -62,7 +67,10 @@ fun GastosScreen(
                         modifier = Modifier.weight(1f),
                     )
                 }
-                OutlinePill("+ Gasto manual", onClick = onAddManual, modifier = Modifier.fillMaxWidth())
+                Row(horizontalArrangement = Arrangement.spacedBy(KtpjDimens.cardGap)) {
+                    OutlinePill("+ Gasto manual", onClick = onAddManual, modifier = Modifier.weight(1f))
+                    OutlinePill("Balance del mes", onClick = onOpenBalance, modifier = Modifier.weight(1f))
+                }
             }
         },
     )

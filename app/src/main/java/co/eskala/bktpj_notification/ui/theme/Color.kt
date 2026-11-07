@@ -22,6 +22,10 @@ data class KtpjColors(
     val invFg: Color,
     val dot: Color,         // punto de estado activo
     val shade: Color,       // fondo de pantalla de bloqueo / panel de notificaciones
+    val blue: Color,        // tarea "en curso"
+    val blueSoft: Color,    // fondo suave de "en curso"
+    val chartVariable: Color, // gráficos: gastos variables (validado CVD con chartFixed)
+    val chartFixed: Color,    // gráficos: gastos fijos
     val isDark: Boolean,
 )
 
@@ -42,6 +46,10 @@ val LightKtpjColors = KtpjColors(
     invFg      = Color(0xFFFFFFFF),
     dot        = Color(0xFF3BD16F),
     shade      = Color(0xFFE9E9EB),
+    blue       = Color(0xFF1F5FD1),
+    blueSoft   = Color(0xFFEAF1FF),
+    chartVariable = Color(0xFFEB6834),
+    chartFixed    = Color(0xFF2A78D6),
     isDark     = false,
 )
 
@@ -62,5 +70,9 @@ val DarkKtpjColors = KtpjColors(
     invFg      = Color(0xFF111113),
     dot        = Color(0xFF1E9E4E),
     shade      = Color(0xFF000000),
+    blue       = Color(0xFF7AA7FF),
+    blueSoft   = Color(0xFF14213D),
+    chartVariable = Color(0xFFD95926),
+    chartFixed    = Color(0xFF3987E5),
     isDark     = true,
 )

@@ -25,6 +25,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import co.eskala.bktpj_notification.Capture
+import co.eskala.bktpj_notification.Balance
+import co.eskala.bktpj_notification.FixedStore
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
+import co.eskala.bktpj_notification.ui.theme.KtpjShapes
 import co.eskala.bktpj_notification.CaptureSource
 import co.eskala.bktpj_notification.CaptureStatus
 import co.eskala.bktpj_notification.Money
@@ -54,6 +60,8 @@ fun HistoryScreen(
     modifier: Modifier = Modifier,
     title: String = "Historial",
     header: (@Composable () -> Unit)? = null,
+    fixed: Set<String> = emptySet(),
+    onToggleFixed: ((Capture) -> Unit)? = null,
 ) {
     val c = KtpjTheme.colors
     val t = KtpjTheme.type
@@ -96,14 +104,21 @@ fun HistoryScreen(
         }
         byDay.forEach { (day, list) ->
             item(key = "day:$day") {
-                val total = list.sumOf { Money.signedValue(it.tx.amount, it.tx.type) }
+                // Lo gastado en variables ese día; fijos e ingresos van aparte en el Balance.
+                val variable = Balance.variableOf(list, fixed)
                 Row(Modifier.fillMaxWidth().padding(top = 18.dp, bottom = 4.dp)) {
                     Text(dayLabel(list.first().at), style = t.captionStrong, color = c.muted, modifier = Modifier.weight(1f))
-                    Text(Money.signedTotal(total), style = t.captionStrong, color = c.muted)
+                    if (variable > 0) Text("−" + Money.format(variable), style = t.captionStrong, color = c.muted)
                 }
             }
             items(list, key = { it.id }) { cap ->
-                HistoryRow(cap, retrying = cap.id in retrying, onRetry = { onRetry(cap.id) })
+                HistoryRow(
+                    cap,
+                    retrying = cap.id in retrying,
+                    onRetry = { onRetry(cap.id) },
+                    isFixed = FixedStore.keyOf(cap) in fixed,
+                    onToggleFixed = onToggleFixed?.let { f -> { f(cap) } },
+                )
             }
         }
     }
@@ -111,7 +126,7 @@ fun HistoryScreen(
 
 /** Fila: comercio | monto; "HH:mm · Inbox + Hoy" | "✓ Guardado" o pill "Reintentar". Divisor inferior `line`. */
 @Composable
-private fun HistoryRow(cap: Capture, retrying: Boolean, onRetry: () -> Unit) {
+private fun HistoryRow(cap: Capture, retrying: Boolean, onRetry: () -> Unit, isFixed: Boolean = false, onToggleFixed: (() -> Unit)? = null) {
     val c = KtpjTheme.colors
     val t = KtpjTheme.type
     val line = c.line
@@ -146,6 +161,18 @@ private fun HistoryRow(cap: Capture, retrying: Boolean, onRetry: () -> Unit) {
                 modifier = Modifier.weight(1f).padding(end = 8.dp),
             )
             if (cap.status == CaptureStatus.OK) {
+                if (onToggleFixed != null && Balance.counted(cap)) {
+                    // Casilla "Fijo": se recuerda por comercio (arriendo, servicios…).
+                    Text(
+                        if (isFixed) "☑ Fijo" else "☐ Fijo",
+                        style = t.captionStrong,
+                        color = if (isFixed) c.chartFixed else c.muted,
+                        modifier = Modifier
+                            .clip(KtpjShapes.pill)
+                            .toggleable(value = isFixed, role = Role.Checkbox, onValueChange = { onToggleFixed() })
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                    )
+                }
                 Text("✓ Guardado", style = t.captionStrong, color = c.green)
             } else {
                 RetryPill(onRetry, retrying, onAccentBackground = false)

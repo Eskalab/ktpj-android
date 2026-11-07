@@ -41,6 +41,12 @@ import co.eskala.bktpj_notification.Prefs
 import co.eskala.bktpj_notification.Shortcut
 import co.eskala.bktpj_notification.ShortcutStore
 import co.eskala.bktpj_notification.SpurTask
+import co.eskala.bktpj_notification.FixedStore
+import co.eskala.bktpj_notification.Capture
+import co.eskala.bktpj_notification.ui.balance.BalanceScreen
+import co.eskala.bktpj_notification.EpicCard
+import co.eskala.bktpj_notification.ui.tasks.EpicScreen
+import co.eskala.bktpj_notification.ui.components.UsedPrefixes
 import co.eskala.bktpj_notification.DailySummary
 import co.eskala.bktpj_notification.ui.summary.DaySummaryScreen
 import co.eskala.bktpj_notification.ui.components.isToday
@@ -71,7 +77,7 @@ import kotlinx.coroutines.launch
 private enum class Tab(val label: String) { INICIO("Inicio"), TAREAS("Tareas"), GASTOS("Gastos"), AJUSTES("Ajustes") }
 
 /** Pantallas que se abren encima de las pestañas. */
-private enum class Overlay { MANUAL, SHORTCUT, NEW_TASK, EDIT_TASK, SUMMARY, DESTINATIONS, NEON }
+private enum class Overlay { MANUAL, SHORTCUT, NEW_TASK, EDIT_TASK, SUMMARY, EPIC, BALANCE, DESTINATIONS, NEON }
 
 /** App ya configurada: Inicio (dashboard) / Tareas / Gastos / Ajustes con navegación inferior. */
 @Composable
@@ -104,7 +110,14 @@ fun MainScreen(
     var editingShortcutId by rememberSaveable { mutableStateOf<String?>(null) }   // null = atajo nuevo
     var editingTaskId by rememberSaveable { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(Unit) { CaptureLog.load(ctx) }
+    LaunchedEffect(Unit) { CaptureLog.load(ctx); FixedStore.load(ctx) }
+    val fixed by FixedStore.fixed.collectAsState()
+    var newTaskDue by rememberSaveable { mutableStateOf<String?>(null) }   // "+ Tarea" de Inicio = para hoy
+    fun toggleFixed(cap: Capture) {
+        val on = FixedStore.keyOf(cap) !in fixed
+        FixedStore.setFixed(ctx, cap, on)
+        Toast.makeText(ctx, if (on) "${cap.label}: fijo (se aplica a todos sus movimientos)" else "${cap.label}: ya no es fijo", Toast.LENGTH_SHORT).show()
+    }
     val captures by CaptureLog.captures.collectAsState()
     val retrying = remember { mutableStateListOf<String>() }
 
@@ -159,10 +172,40 @@ fun MainScreen(
     // Tarea recién completada: abre "¿Qué sigue?" para continuar el hilo.
     var followUpOf by remember { mutableStateOf<SpurTask?>(null) }
     var creatingFollowUp by remember { mutableStateOf(false) }
-    // Proyectos de KTPJ para el formulario y "¿Qué sigue?"; se recargan al abrir cualquiera de los dos.
+    // Épicas (Projects de KTPJ) para el formulario y "¿Qué sigue?"; se recargan al abrir cualquiera de los dos.
     var projects by remember { mutableStateOf<List<TaskProject>>(emptyList()) }
-    LaunchedEffect(overlay == Overlay.NEW_TASK || overlay == Overlay.EDIT_TASK || followUpOf != null) {
-        NeonRepository.fetchProjects(ctx).getOrNull()?.let { projects = it }
+    val createProject: suspend (String, String) -> TaskProject? = { name, prefix ->
+        val r = NeonRepository.insertProject(ctx, name, prefix)
+        r.getOrNull()?.also { p -> projects = (projects + p).sortedBy { it.title.lowercase() } }
+            ?: run {
+                val msg = r.exceptionOrNull()?.message.orEmpty()
+                val why = if ("projects_prefix_key" in msg || "duplicate" in msg) "el prefijo $prefix ya existe" else msg
+                Toast.makeText(ctx, "No se pudo crear la épica: $why", Toast.LENGTH_LONG).show(); null
+            }
+    }
+    fun loadProjects() {
+        scope.launch {
+            NeonRepository.fetchProjects(ctx).getOrNull()?.let { projects = it }
+            NeonRepository.fetchUsedPrefixes(ctx).getOrNull()?.let { UsedPrefixes.boards = it }
+        }
+    }
+    LaunchedEffect(overlay == Overlay.NEW_TASK || overlay == Overlay.EDIT_TASK || followUpOf != null || tab == Tab.TAREAS) {
+        loadProjects()
+    }
+
+    // Épica abierta (pantalla con sus tareas). Se recarga cuando cambian las tareas.
+    var epicId by rememberSaveable { mutableStateOf<String?>(null) }
+    var epicCards by remember { mutableStateOf<List<EpicCard>?>(null) }
+    fun openEpic(p: TaskProject) { epicId = p.id; epicCards = null; overlay = Overlay.EPIC }
+
+    fun toggleStarted(task: SpurTask) {
+        if (task.id in completingTasks) return
+        completingTasks += task.id
+        scope.launch {
+            val r = SpurTasks.setStarted(ctx, task.id, !task.started)
+            completingTasks -= task.id
+            if (r.isFailure) Toast.makeText(ctx, "No se pudo cambiar: ${r.exceptionOrNull()?.message}", Toast.LENGTH_LONG).show()
+        }
     }
 
     fun completeTask(task: SpurTask) {
@@ -200,7 +243,7 @@ fun MainScreen(
             completingTasks -= task.id
             when {
                 r.isFailure -> Toast.makeText(ctx, "No se pudo cambiar: ${r.exceptionOrNull()?.message}", Toast.LENGTH_LONG).show()
-                !task.priority -> Toast.makeText(ctx, "★ Prioritaria: te la recuerdo cada hora", Toast.LENGTH_SHORT).show()
+                !task.priority -> Toast.makeText(ctx, "★ Prioritaria: el día de su fecha te la recuerdo cada hora", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -244,6 +287,34 @@ fun MainScreen(
     }
 
     when (overlay) {
+        Overlay.BALANCE -> {
+            BalanceScreen(captures = captures, fixed = fixed, onBack = { overlay = null })
+            return
+        }
+
+        Overlay.EPIC -> {
+            val project = projects.firstOrNull { it.id == epicId }
+                ?: (tasks + doneToday).firstNotNullOfOrNull { t -> t.project?.takeIf { it.id == epicId } }
+            if (project == null) { overlay = null; return }
+            LaunchedEffect(epicId, tasks, doneToday) {
+                NeonRepository.fetchEpicCards(ctx, project.id).getOrNull()?.let { epicCards = it }
+            }
+            EpicScreen(
+                project = project,
+                cards = epicCards,
+                completing = completingTasks.toSet(),
+                onDone = ::completeTask,
+                onToggleStarted = ::toggleStarted,
+                onTogglePriority = ::togglePriority,
+                onEdit = { editingTaskId = it.id; overlay = Overlay.EDIT_TASK },
+                onBack = { overlay = null; loadProjects() },
+            )
+            followUpOf?.let { done ->
+                NextTaskDialog(done = done, saving = creatingFollowUp, onCreate = ::createFollowUp, onDismiss = { followUpOf = null }, projects = projects, onCreateProject = createProject)
+            }
+            return
+        }
+
         Overlay.SUMMARY -> {
             val kind = summaryKind?.let { runCatching { DailySummary.Kind.valueOf(it) }.getOrNull() }
             if (kind == null) { overlay = null; return }
@@ -270,7 +341,7 @@ fun MainScreen(
                 onClose = { overlay = null },
             )
             followUpOf?.let { done ->
-                NextTaskDialog(done = done, saving = creatingFollowUp, onCreate = ::createFollowUp, onDismiss = { followUpOf = null }, projects = projects)
+                NextTaskDialog(done = done, saving = creatingFollowUp, onCreate = ::createFollowUp, onDismiss = { followUpOf = null }, projects = projects, onCreateProject = createProject)
             }
             return
         }
@@ -278,7 +349,9 @@ fun MainScreen(
         Overlay.NEW_TASK -> {
             var saving by remember { mutableStateOf(false) }
             NewTaskScreen(
+                initialDue = newTaskDue,
                 projects = projects,
+                onCreateProject = createProject,
                 saving = saving,
                 onSave = { task ->
                     saving = true
@@ -286,7 +359,7 @@ fun MainScreen(
                         val r = SpurTasks.create(ctx, task.title, task.description, task.due, task.priority, task.app, task.projectId)
                         saving = false
                         if (r.isSuccess) {
-                            Toast.makeText(ctx, if (task.priority) "★ Tarea creada: te la recuerdo cada hora" else "Tarea creada", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(ctx, if (task.priority) "★ Tarea creada: el día de su fecha te la recuerdo cada hora" else "Tarea creada", Toast.LENGTH_SHORT).show()
                             overlay = null
                             tab = Tab.TAREAS
                         } else {
@@ -307,6 +380,7 @@ fun MainScreen(
             NewTaskScreen(
                 initial = original,
                 projects = projects,
+                onCreateProject = createProject,
                 saving = saving,
                 onSave = { task ->
                     saving = true
@@ -481,6 +555,14 @@ fun MainScreen(
                     onTaskDone = ::completeTask,
                     onTaskPriority = ::togglePriority,
                     onTaskEdit = { editingTaskId = it.id; overlay = Overlay.EDIT_TASK },
+                    onTaskStarted = ::toggleStarted,
+                    onOpenEpic = ::openEpic,
+                    onAddTask = {
+                        newTaskDue = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
+                        overlay = Overlay.NEW_TASK
+                    },
+                    onOpenBalance = { overlay = Overlay.BALANCE },
+                    fixed = fixed,
                     onOpenTasks = { tab = Tab.TAREAS },
                     onOpenGastos = { tab = Tab.GASTOS },
                     summaryBanner = remember(summarySeenTick, tab, overlay) {
@@ -496,8 +578,11 @@ fun MainScreen(
                     onDone = ::completeTask,
                     onRefresh = ::refreshTasks,
                     onTogglePriority = ::togglePriority,
-                    onAdd = { overlay = Overlay.NEW_TASK },
+                    onAdd = { newTaskDue = null; overlay = Overlay.NEW_TASK },
                     onEdit = { editingTaskId = it.id; overlay = Overlay.EDIT_TASK },
+                    onToggleStarted = ::toggleStarted,
+                    epics = projects,
+                    onOpenEpic = ::openEpic,
                     doneToday = doneToday,
                     onSetDue = { task, due ->
                         scope.launch {
@@ -513,6 +598,9 @@ fun MainScreen(
                     retrying = retrying.toSet(),
                     onRetry = ::retry,
                     onAddManual = { overlay = Overlay.MANUAL },
+                    fixed = fixed,
+                    onToggleFixed = ::toggleFixed,
+                    onOpenBalance = { overlay = Overlay.BALANCE },
                 )
 
                 Tab.AJUSTES -> SettingsScreen(
@@ -543,6 +631,7 @@ fun MainScreen(
             onCreate = ::createFollowUp,
             onDismiss = { followUpOf = null },
             projects = projects,
+                onCreateProject = createProject,
         )
     }
 }

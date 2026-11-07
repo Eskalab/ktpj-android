@@ -211,36 +211,43 @@ object NeonRepository {
             }
         }
 
-    /** Tareas creadas desde Claude Code con el skill /spur (tablero "Spur"), pendientes. */
+    /** Columnas comunes de una tarea (alias c = cards, p = projects). */
+    private const val TASK_COLS = """c.id, c.title, c.description, to_char(c.due_date, 'YYYY-MM-DD') AS due,
+                      c.priority IN ('HIGH', 'CRITICAL') AS high,
+                      (SELECT substring(l FROM 5) FROM unnest(c.labels) l WHERE l LIKE 'app:%' LIMIT 1) AS app,
+                      c.project_id, p.title AS project, p.color AS project_color, p.prefix AS project_prefix,
+                      c.key, c.started_at IS NOT NULL AS started, c.done"""
+
+    private fun JSONObject.str(k: String): String? = if (isNull(k)) null else optString(k).takeIf { it.isNotBlank() }
+
+    private fun taskFromRow(row: JSONObject) = SpurTask(
+        id = row.getString("id"),
+        title = row.getString("title"),
+        description = row.str("description"),
+        due = row.str("due"),
+        priority = row.optBoolean("high", false),
+        app = row.str("app"),
+        project = row.str("project_id")?.let { TaskProject(it, row.str("project").orEmpty(), row.str("project_color"), row.str("project_prefix")) },
+        key = row.str("key"),
+        started = row.optBoolean("started", false),
+    )
+
+    private fun JSONObject.taskRows(): List<SpurTask> {
+        val rows = getJSONArray("rows")
+        return (0 until rows.length()).map { taskFromRow(rows.getJSONObject(it)) }
+    }
+
+    /** Tareas de Spur (app y /spur) pendientes. */
     suspend fun fetchClaudeTasks(ctx: Context): Result<List<SpurTask>> =
         sql(
             ctx,
-            """SELECT c.id, c.title, c.description, to_char(c.due_date, 'YYYY-MM-DD') AS due,
-                      c.priority IN ('HIGH', 'CRITICAL') AS high,
-                      (SELECT substring(l FROM 5) FROM unnest(c.labels) l WHERE l LIKE 'app:%' LIMIT 1) AS app,
-                      c.project_id, p.title AS project, p.color AS project_color
+            """SELECT $TASK_COLS
                FROM cards c LEFT JOIN projects p ON p.id = c.project_id
                WHERE c.source_type IN ('claude', 'spur') AND NOT c.done AND NOT c.archived
                ORDER BY c.priority IN ('HIGH', 'CRITICAL') DESC, c.created_at DESC
-               LIMIT 50""",
+               LIMIT 80""",
             emptyList()
-        ).mapCatching { obj ->
-            val rows = obj.getJSONArray("rows")
-            (0 until rows.length()).map { i ->
-                val row = rows.getJSONObject(i)
-                SpurTask(
-                    id = row.getString("id"),
-                    title = row.getString("title"),
-                    description = row.optString("description").takeIf { !row.isNull("description") && it.isNotBlank() },
-                    due = row.optString("due").takeIf { !row.isNull("due") && it.isNotBlank() },
-                    priority = row.optBoolean("high", false),
-                    app = row.optString("app").takeIf { !row.isNull("app") && it.isNotBlank() },
-                    project = row.optString("project_id").takeIf { !row.isNull("project_id") && it.isNotBlank() }?.let {
-                        TaskProject(it, row.optString("project"), row.optString("project_color").takeIf { c -> c.isNotBlank() })
-                    },
-                )
-            }
-        }
+        ).mapCatching { it.taskRows() }
 
     /** Prioritaria = HIGH (la web la muestra así); quitarla la deja en MEDIUM, el valor por defecto. */
     suspend fun setTaskPriority(ctx: Context, id: String, high: Boolean): Result<Unit> =
@@ -275,8 +282,65 @@ object NeonRepository {
                       'NONE', '{}', false, false, false, NOW(), $8
                FROM next_ord""",
             listOf(id, title, description, if (high) "HIGH" else "MEDIUM", "spur_$id", due, app, projectId),
-        ).map { id }
+        ).mapCatching { assignKey(ctx, id, projectId).getOrThrow(); id }
     }
+
+    /**
+     * Da a la tarjeta su ID tipo Jira: siguiente número de la épica (LAV-4) o, sin épica o si la épica
+     * no tiene prefijo, del tablero Spur (SP-12). Los números no se reutilizan (contadores en la base).
+     */
+    suspend fun assignKey(ctx: Context, cardId: String, projectId: String?): Result<String?> =
+        sql(
+            ctx,
+            """WITH pr AS (
+                 UPDATE projects SET key_seq = key_seq + 1
+                 WHERE id = $2 AND prefix IS NOT NULL
+                 RETURNING prefix || '-' || key_seq AS k
+               ), bd AS (
+                 UPDATE boards SET card_count = card_count + 1
+                 WHERE id = 'spur_board' AND NOT EXISTS (SELECT 1 FROM pr)
+                 RETURNING COALESCE(NULLIF(prefix, ''), 'SP') || '-' || card_count AS k
+               )
+               UPDATE cards SET key = COALESCE((SELECT k FROM pr), (SELECT k FROM bd))
+               WHERE id = $1
+               RETURNING key""",
+            listOf(cardId, projectId),
+        ).map { obj -> obj.getJSONArray("rows").optJSONObject(0)?.str("key") }
+
+    /** En curso (true) o de vuelta a pendiente (false). */
+    suspend fun setTaskStarted(ctx: Context, id: String, started: Boolean): Result<Unit> =
+        sql(
+            ctx,
+            "UPDATE cards SET started_at = CASE WHEN $2::boolean THEN COALESCE(started_at, NOW()) END WHERE id = $1 AND source_type IN ('claude', 'spur')",
+            listOf(id, started),
+        ).map { }
+
+    /** Todas las tarjetas de una épica (Spur y web), sin archivadas. */
+    suspend fun fetchEpicCards(ctx: Context, projectId: String): Result<List<EpicCard>> =
+        sql(
+            ctx,
+            """SELECT $TASK_COLS, c.source_type IN ('claude', 'spur') AS from_spur,
+                      b.title AS board, co.title AS col
+               FROM cards c
+               LEFT JOIN projects p ON p.id = c.project_id
+               LEFT JOIN columns co ON co.id = c.column_id
+               LEFT JOIN boards b ON b.id = co.board_id
+               WHERE c.project_id = $1 AND NOT c.archived
+               ORDER BY c.done, c.started_at IS NULL, c.due_date NULLS LAST, c.done_at DESC NULLS LAST, c.created_at""",
+            listOf(projectId),
+        ).mapCatching { obj ->
+            val rows = obj.getJSONArray("rows")
+            (0 until rows.length()).map { i ->
+                val row = rows.getJSONObject(i)
+                val spur = row.optBoolean("from_spur", false)
+                EpicCard(
+                    task = taskFromRow(row),
+                    done = row.optBoolean("done", false),
+                    fromSpur = spur,
+                    where = if (spur) null else listOfNotNull(row.str("board"), row.str("col")).joinToString(" · ").ifEmpty { null },
+                )
+            }
+        }
 
     /**
      * Tareas completadas desde [sinceUtc] (inicio del día local, en UTC). Usa `done_at`, que llena un
@@ -286,25 +350,14 @@ object NeonRepository {
     suspend fun fetchTasksDoneSince(ctx: Context, sinceUtc: String): Result<List<SpurTask>> =
         sql(
             ctx,
-            """SELECT id, title, description, to_char(due_date, 'YYYY-MM-DD') AS due
-               FROM cards
-               WHERE source_type IN ('claude', 'spur') AND done AND NOT archived
-                 AND done_at >= $1::timestamp
-               ORDER BY done_at DESC
+            """SELECT $TASK_COLS
+               FROM cards c LEFT JOIN projects p ON p.id = c.project_id
+               WHERE c.source_type IN ('claude', 'spur') AND c.done AND NOT c.archived
+                 AND c.done_at >= $1::timestamp
+               ORDER BY c.done_at DESC
                LIMIT 50""",
             listOf(sinceUtc),
-        ).mapCatching { obj ->
-            val rows = obj.getJSONArray("rows")
-            (0 until rows.length()).map { i ->
-                val row = rows.getJSONObject(i)
-                SpurTask(
-                    id = row.getString("id"),
-                    title = row.getString("title"),
-                    description = row.optString("description").takeIf { !row.isNull("description") && it.isNotBlank() },
-                    due = row.optString("due").takeIf { !row.isNull("due") && it.isNotBlank() },
-                )
-            }
-        }
+        ).mapCatching { it.taskRows() }
 
     /** Fecha para hacerla (YYYY-MM-DD) o null para quitarla. */
     suspend fun setTaskDue(ctx: Context, id: String, due: String?): Result<Unit> =
@@ -327,16 +380,60 @@ object NeonRepository {
             listOf(id, title, description, due, if (high) "HIGH" else "MEDIUM", app, projectId),
         ).map { }
 
-    /** Proyectos activos de KTPJ, para agrupar tareas (el mismo "Proyecto" de la web). */
+    /** Épicas activas (Projects de KTPJ) con prefijo y avance (tarjetas hechas / total). */
     suspend fun fetchProjects(ctx: Context): Result<List<TaskProject>> =
-        sql(ctx, "SELECT id, title, color FROM projects WHERE status = 'ACTIVE' ORDER BY title", emptyList())
+        sql(
+            ctx,
+            """SELECT p.id, p.title, p.color, p.prefix,
+                      COUNT(c.id) FILTER (WHERE NOT c.archived) AS total,
+                      COUNT(c.id) FILTER (WHERE NOT c.archived AND c.done) AS done
+               FROM projects p LEFT JOIN cards c ON c.project_id = p.id
+               WHERE p.status = 'ACTIVE'
+               GROUP BY p.id ORDER BY p.title""",
+            emptyList(),
+        ).mapCatching { obj ->
+            val rows = obj.getJSONArray("rows")
+            (0 until rows.length()).map { i ->
+                val row = rows.getJSONObject(i)
+                TaskProject(
+                    row.getString("id"), row.getString("title"), row.str("color"), row.str("prefix"),
+                    total = row.opt("total").toString().toIntOrNull() ?: 0,
+                    done = row.opt("done").toString().toIntOrNull() ?: 0,
+                )
+            }
+        }
+
+    /** Prefijos ya usados (épicas y tableros): un ID no puede chocar con otro tablero de KTPJ. */
+    suspend fun fetchUsedPrefixes(ctx: Context): Result<Set<String>> =
+        sql(ctx, "SELECT prefix FROM projects WHERE prefix IS NOT NULL UNION SELECT prefix FROM boards WHERE prefix <> ''", emptyList())
             .mapCatching { obj ->
                 val rows = obj.getJSONArray("rows")
-                (0 until rows.length()).map { i ->
-                    val row = rows.getJSONObject(i)
-                    TaskProject(row.getString("id"), row.getString("title"), row.optString("color").takeIf { it.isNotBlank() })
-                }
+                (0 until rows.length()).mapNotNull { rows.getJSONObject(it).str("prefix")?.uppercase() }.toSet() + "SP"
             }
+
+    /**
+     * Épica nueva desde el celular (solo nombre): es un Project de KTPJ con el mismo dueño del tablero
+     * Spur. El color rota en una paleta para que cada épica se distinga en la lista.
+     */
+    suspend fun insertProject(ctx: Context, title: String, prefix: String): Result<TaskProject> {
+        val id = "spur_" + UUID.randomUUID().toString().replace("-", "").take(20)
+        val palette = listOf("#2E7D32", "#1565C0", "#C62828", "#EF6C00", "#6A1B9A", "#00838F", "#AD1457", "#5D4037")
+        return sql(
+            ctx,
+            """INSERT INTO projects (id, title, owner_id, color, prefix)
+               SELECT $1, $2, owner_id,
+                      ($3::text[])[1 + (SELECT COUNT(*) FROM projects)::int % array_length($3::text[], 1)], $4
+               FROM boards WHERE id = 'spur_board'
+                 AND NOT EXISTS (SELECT 1 FROM boards WHERE prefix = $4)
+               RETURNING id, title, color, prefix""",
+            listOf(id, title, palette.joinToString(",", "{", "}"), prefix),   // literal de arreglo Postgres
+        ).mapCatching { obj ->
+            val rows = obj.getJSONArray("rows")
+            check(rows.length() == 1) { "el prefijo $prefix ya lo usa un tablero" }
+            val row = rows.getJSONObject(0)
+            TaskProject(row.getString("id"), row.getString("title"), row.str("color"), row.str("prefix"))
+        }
+    }
 
     suspend fun markTaskDone(ctx: Context, id: String): Result<Unit> =
         sql(ctx, "UPDATE cards SET done = true WHERE id = $1 AND source_type IN ('claude', 'spur')", listOf(id)).map { }

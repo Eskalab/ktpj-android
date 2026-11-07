@@ -18,6 +18,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import co.eskala.bktpj_notification.SpurTask
+import co.eskala.bktpj_notification.TaskProject
+import co.eskala.bktpj_notification.ui.components.EpicRow
 import co.eskala.bktpj_notification.ui.components.OutlinePill
 import co.eskala.bktpj_notification.ui.components.PrimaryButton
 import co.eskala.bktpj_notification.ui.components.DoneTaskRow
@@ -56,6 +58,9 @@ fun TasksScreen(
     doneToday: List<SpurTask> = emptyList(),
     onSetDue: (SpurTask, String?) -> Unit = { _, _ -> },
     onEdit: (SpurTask) -> Unit = {},
+    onToggleStarted: (SpurTask) -> Unit = {},
+    epics: List<TaskProject> = emptyList(),
+    onOpenEpic: (TaskProject) -> Unit = {},
 ) {
     val c = KtpjTheme.colors
     val t = KtpjTheme.type
@@ -71,6 +76,7 @@ fun TasksScreen(
     var openDone by rememberSaveable { mutableStateOf(true) }
     var openUpcoming by rememberSaveable { mutableStateOf(false) }
     var openNoDate by rememberSaveable { mutableStateOf(false) }
+    var openEpics by rememberSaveable { mutableStateOf(false) }
 
     LazyColumn(
         modifier.fillMaxSize().background(c.bg),
@@ -132,6 +138,8 @@ fun TasksScreen(
                     onTogglePriority = { onTogglePriority(task) },
                     onEditDate = { editingDate = task },
                     onEdit = { onEdit(task) },
+                    onToggleStarted = { onToggleStarted(task) },
+                    onOpenEpic = onOpenEpic,
                 )
             }
         }
@@ -145,6 +153,10 @@ fun TasksScreen(
         }
         section("PRÓXIMOS DÍAS", upcoming, openUpcoming, { openUpcoming = !openUpcoming })
         section("SIN FECHA", noDate, openNoDate, { openNoDate = !openNoDate })
+        if (epics.isNotEmpty()) {
+            header("ÉPICAS", epics.size, openEpics) { openEpics = !openEpics }
+            if (openEpics) items(epics, key = { "epic:" + it.id }) { e -> EpicRow(e, onOpen = { onOpenEpic(e) }) }
+        }
     }
 
     editingDate?.let { task ->

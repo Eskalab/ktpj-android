@@ -22,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import co.eskala.bktpj_notification.SpurTask
+import co.eskala.bktpj_notification.TaskProject
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -52,25 +53,29 @@ fun TaskRow(
     onTogglePriority: (() -> Unit)? = null,
     onEditDate: (() -> Unit)? = null,
     onEdit: (() -> Unit)? = null,
+    onToggleStarted: (() -> Unit)? = null,
+    onOpenEpic: ((TaskProject) -> Unit)? = null,
 ) {
     val c = KtpjTheme.colors
     val t = KtpjTheme.type
-    // ★ resalta (fondo cálido + franja de acento a la izquierda). Normales: gris neutro en claro;
-    // en oscuro, negras como la pantalla con un borde sutil, para que la ★ sea lo único con color.
+    // ★ resalta (fondo cálido + franja de acento). En curso: franja azul (y fondo azul suave si no es ★).
+    // Normales: gris neutro en claro; en oscuro, negras como la pantalla con un borde sutil.
     val bg = when {
         task.priority -> c.accentSoft
+        task.started -> c.blueSoft
         c.isDark -> c.bg
         else -> c.card
     }
     val secondary = if (task.priority) c.accentText else c.muted
-    val stripe = c.accent
+    val stripe = if (task.started) c.blue else c.accent
+    val hasStripe = task.priority || task.started
     Row(
         modifier
             .fillMaxWidth()
             .clip(KtpjShapes.card)
             .background(bg)
             .then(
-                if (task.priority) Modifier.drawBehind { drawRect(stripe, size = Size(5.dp.toPx(), size.height)) }
+                if (hasStripe) Modifier.drawBehind { drawRect(stripe, size = Size(5.dp.toPx(), size.height)) }
                 else if (c.isDark) Modifier.border(1.dp, c.line, KtpjShapes.card)
                 else Modifier
             )
@@ -87,24 +92,54 @@ fun TaskRow(
                 ),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
+            task.key?.let { Text(it, style = t.monoSmall, color = c.muted) }
             Text(task.title, style = t.rowTitle, color = c.fg)
             val date = task.due?.let(::dueLabel)
             val overdue = task.due?.let(::isOverdue) == true
-            if (onEditDate != null) {
-                Text(
-                    (date ?: "+ Fecha") + if (overdue) " · atrasada" else "",
-                    style = t.captionStrong,
-                    color = if (overdue) c.accent else if (date != null) secondary else c.muted,
-                    modifier = Modifier
-                        .clip(KtpjShapes.pill)
-                        .clickable(enabled = !busy, role = Role.Button, onClickLabel = "Cambiar fecha", onClick = onEditDate)
-                        .padding(vertical = 4.dp),
-                )
-            } else if (date != null) {
-                Text(date, style = t.captionStrong, color = if (overdue) c.accent else secondary)
+            Row(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (onEditDate != null) {
+                    Text(
+                        (date ?: "+ Fecha") + if (overdue) " · atrasada" else "",
+                        style = t.captionStrong,
+                        color = if (overdue) c.accent else if (date != null) secondary else c.muted,
+                        modifier = Modifier
+                            .clip(KtpjShapes.pill)
+                            .clickable(enabled = !busy, role = Role.Button, onClickLabel = "Cambiar fecha", onClick = onEditDate)
+                            .padding(vertical = 4.dp),
+                    )
+                } else if (date != null) {
+                    Text(date, style = t.captionStrong, color = if (overdue) c.accent else secondary)
+                }
+                if (onToggleStarted != null) {
+                    Text(
+                        if (task.started) "● En curso" else "▶ Empezar",
+                        style = t.captionStrong,
+                        color = if (task.started) c.blue else c.muted,
+                        modifier = Modifier
+                            .clip(KtpjShapes.pill)
+                            .clickable(
+                                enabled = !busy,
+                                role = Role.Button,
+                                onClickLabel = if (task.started) "Volver a pendiente" else "Marcar en curso",
+                                onClick = onToggleStarted,
+                            )
+                            .padding(vertical = 4.dp),
+                    )
+                } else if (task.started) {
+                    Text("● En curso", style = t.captionStrong, color = c.blue)
+                }
             }
             task.description?.let { Text(it, style = t.caption, color = secondary, maxLines = 2) }
-            task.project?.let { ProjectTag(it, secondary) }
+            task.project?.let { p ->
+                if (onOpenEpic != null) {
+                    Box(
+                        Modifier
+                            .clip(KtpjShapes.pill)
+                            .clickable(role = Role.Button, onClickLabel = "Ver épica ${p.title}") { onOpenEpic(p) }
+                            .padding(vertical = 4.dp)
+                    ) { ProjectTag(p, secondary) }
+                } else ProjectTag(p, secondary)
+            }
             task.app?.let { AppLink(it, enabled = !busy) }
         }
         if (onTogglePriority != null) {
@@ -134,7 +169,7 @@ fun TaskRow(
 
 /** Terminada hoy: tachada, sin acciones. */
 @Composable
-fun DoneTaskRow(task: SpurTask, modifier: Modifier = Modifier) {
+fun DoneTaskRow(task: SpurTask, modifier: Modifier = Modifier, titleColor: androidx.compose.ui.graphics.Color? = null) {
     val c = KtpjTheme.colors
     val t = KtpjTheme.type
     Row(
@@ -146,12 +181,14 @@ fun DoneTaskRow(task: SpurTask, modifier: Modifier = Modifier) {
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Text("✓", style = t.rowTitle, color = c.green)
-        Text(
-            task.title,
-            style = t.body.copy(textDecoration = TextDecoration.LineThrough),
-            color = c.muted,
-            modifier = Modifier.weight(1f),
-        )
+        Column(Modifier.weight(1f)) {
+            task.key?.let { Text(it, style = t.monoSmall, color = c.muted) }
+            Text(
+                task.title,
+                style = t.body.copy(textDecoration = TextDecoration.LineThrough),
+                color = titleColor ?: c.muted,
+            )
+        }
     }
 }
 

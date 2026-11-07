@@ -51,13 +51,14 @@ fun NextTaskDialog(
     onCreate: (title: String, priority: Boolean, due: String?, projectId: String?) -> Unit,
     onDismiss: () -> Unit,
     projects: List<TaskProject> = emptyList(),
+    onCreateProject: (suspend (String, String) -> TaskProject?)? = null,
 ) {
     val c = KtpjTheme.colors
     val t = KtpjTheme.type
     var title by rememberSaveable(done.id) { mutableStateOf("") }
     var priority by rememberSaveable(done.id) { mutableStateOf(false) }
     var due by rememberSaveable(done.id) { mutableStateOf<String?>(null) }
-    // Sigue el mismo hilo: hereda el proyecto de la tarea que se acaba de terminar.
+    // Sigue el mismo hilo: hereda la épica de la tarea que se acaba de terminar.
     var projectId by rememberSaveable(done.id) { mutableStateOf(done.project?.id) }
     val focus = remember { FocusRequester() }
     val canCreate = !saving && title.isNotBlank()
@@ -98,7 +99,7 @@ fun NextTaskDialog(
                 },
             )
             DueChips(due, { due = it })
-            if (projects.isNotEmpty()) ProjectChips(projects, projectId, { projectId = it })
+            ProjectChips(projects, projectId, { projectId = it }, onCreateProject)
             Chip("★ Prioritaria", priority, { priority = !priority })
 
             Column(verticalArrangement = Arrangement.spacedBy(KtpjDimens.cardGapSmall)) {

@@ -41,6 +41,8 @@ import co.eskala.bktpj_notification.ui.components.ServiceState
 import co.eskala.bktpj_notification.ui.components.StatusChip
 import co.eskala.bktpj_notification.ui.components.TaskRow
 import co.eskala.bktpj_notification.DailySummary
+import co.eskala.bktpj_notification.Balance
+import co.eskala.bktpj_notification.TaskProject
 import co.eskala.bktpj_notification.ui.summary.SummaryBanner
 import co.eskala.bktpj_notification.ui.components.isToday
 import co.eskala.bktpj_notification.ui.theme.KtpjDimens
@@ -72,6 +74,11 @@ fun HomeScreen(
     onTaskDone: (SpurTask) -> Unit = {},
     onTaskPriority: (SpurTask) -> Unit = {},
     onTaskEdit: (SpurTask) -> Unit = {},
+    onTaskStarted: (SpurTask) -> Unit = {},
+    onOpenEpic: (TaskProject) -> Unit = {},
+    onAddTask: () -> Unit = {},
+    onOpenBalance: () -> Unit = {},
+    fixed: Set<String> = emptySet(),
     onOpenTasks: () -> Unit = {},
     onOpenGastos: () -> Unit = {},
     summaryBanner: DailySummary.Kind? = null,
@@ -81,7 +88,8 @@ fun HomeScreen(
     val t = KtpjTheme.type
     val today = captures.filter { isToday(it.at) }
     val errors = today.count { it.status == CaptureStatus.ERROR }
-    val todayTotal = today.filter { it.status == CaptureStatus.OK }.sumOf { Money.signedValue(it.tx.amount, it.tx.type) }
+    // Solo lo gastado en variables: un arriendo pagado no infla el día y una transferencia recibida no lo compensa.
+    val todayVariable = Balance.variableOf(today, fixed)
 
     Column(
         modifier
@@ -103,7 +111,10 @@ fun HomeScreen(
         Shortcuts(shortcuts, runningShortcuts, onRunShortcut, onEditShortcut, onAddShortcut)
 
         // Separado de los atajos por el espacio entre bloques: un toque en un atajo ya crea la tarjeta.
-        OutlinePill("+ Gasto manual", onClick = onAddManual, modifier = Modifier.fillMaxWidth())
+        Row(horizontalArrangement = Arrangement.spacedBy(KtpjDimens.cardGap)) {
+            OutlinePill("+ Gasto", onClick = onAddManual, modifier = Modifier.weight(1f))
+            OutlinePill("+ Tarea", onClick = onAddTask, modifier = Modifier.weight(1f))
+        }
 
         Row(horizontalArrangement = Arrangement.spacedBy(KtpjDimens.cardGap)) {
             SummaryTile(
@@ -117,11 +128,11 @@ fun HomeScreen(
             )
             SummaryTile(
                 overline = "GASTOS HOY",
-                value = "${today.size}",
-                caption = if (errors > 0) "$errors con error" else Money.signedTotal(todayTotal),
+                value = if (todayVariable > 0) "−" + Money.format(todayVariable) else "0",
+                caption = if (errors > 0) "$errors con error" else "variables · ver balance",
                 bg = c.card,
                 fg = c.muted,
-                onClick = onOpenGastos,
+                onClick = onOpenBalance,
                 modifier = Modifier.weight(1f),
             )
         }
@@ -131,7 +142,7 @@ fun HomeScreen(
         if (todayTasks.isNotEmpty()) {
             Section("TAREAS DE HOY", action = "Ver todas", onAction = onOpenTasks) {
                 todayTasks.forEach { task ->
-                    TaskRow(task, busy = task.id in completingTasks, onDone = { onTaskDone(task) }, onTogglePriority = { onTaskPriority(task) }, onEdit = { onTaskEdit(task) })
+                    TaskRow(task, busy = task.id in completingTasks, onDone = { onTaskDone(task) }, onTogglePriority = { onTaskPriority(task) }, onEdit = { onTaskEdit(task) }, onToggleStarted = { onTaskStarted(task) }, onOpenEpic = onOpenEpic)
                 }
             }
         }

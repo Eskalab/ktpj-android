@@ -51,12 +51,14 @@ fun NewTaskScreen(
     onCancel: () -> Unit,
     initial: SpurTask? = null,
     projects: List<TaskProject> = emptyList(),
+    onCreateProject: (suspend (String, String) -> TaskProject?)? = null,
+    initialDue: String? = null,
 ) {
     val c = KtpjTheme.colors
     val t = KtpjTheme.type
     var title by rememberSaveable { mutableStateOf(initial?.title.orEmpty()) }
     var description by rememberSaveable { mutableStateOf(initial?.description.orEmpty()) }
-    var due by rememberSaveable { mutableStateOf(initial?.due) }
+    var due by rememberSaveable { mutableStateOf(initial?.due ?: initialDue) }
     var priority by rememberSaveable { mutableStateOf(initial?.priority ?: false) }
     var app by rememberSaveable { mutableStateOf(initial?.app) }
     var projectId by rememberSaveable { mutableStateOf(initial?.project?.id) }
@@ -91,16 +93,14 @@ fun NewTaskScreen(
             Field("Fecha") {
                 DueChips(due, { due = it })
             }
-            if (projects.isNotEmpty()) {
-                Field("Proyecto (opcional)") { ProjectChips(projects, projectId, { projectId = it }) }
-            }
+            Field("Épica (opcional)") { ProjectChips(projects, projectId, { projectId = it }, onCreateProject) }
             Field("App (opcional)") {
                 AppField(app, { app = it })
             }
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Chip("★ Prioritaria", priority, { priority = !priority })
                 Text(
-                    if (priority) "Te la recuerdo cada hora, de 6:00 a.m. a 8:00 p.m., hasta que la marques como Hecha."
+                    if (priority) "El día de su fecha (o si se atrasa) te la recuerdo cada hora, de 6:00 a.m. a 8:00 p.m., hasta que la marques como Hecha."
                     else "Sin estrella solo aparece en la lista, sin recordatorios.",
                     style = t.caption,
                     color = c.muted,
