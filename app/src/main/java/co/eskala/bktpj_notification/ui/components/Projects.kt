@@ -23,10 +23,10 @@ private fun projectColor(hex: String?, fallback: Color): Color =
 
 /** "● Sucesión papá" con el color del proyecto en la web. */
 @Composable
-fun ProjectTag(project: TaskProject) {
+fun ProjectTag(project: TaskProject, textColor: Color = KtpjTheme.colors.accentText) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         Box(Modifier.size(8.dp).background(projectColor(project.color, KtpjTheme.colors.muted), KtpjShapes.pill))
-        Text(project.title, style = KtpjTheme.type.caption, color = KtpjTheme.colors.accentText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(project.title, style = KtpjTheme.type.caption, color = textColor, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

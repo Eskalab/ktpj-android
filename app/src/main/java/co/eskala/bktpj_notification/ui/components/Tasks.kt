@@ -1,10 +1,13 @@
 package co.eskala.bktpj_notification.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -52,10 +55,25 @@ fun TaskRow(
 ) {
     val c = KtpjTheme.colors
     val t = KtpjTheme.type
+    // ★ resalta (fondo cálido + franja de acento a la izquierda). Normales: gris neutro en claro;
+    // en oscuro, negras como la pantalla con un borde sutil, para que la ★ sea lo único con color.
+    val bg = when {
+        task.priority -> c.accentSoft
+        c.isDark -> c.bg
+        else -> c.card
+    }
+    val secondary = if (task.priority) c.accentText else c.muted
+    val stripe = c.accent
     Row(
         modifier
             .fillMaxWidth()
-            .background(c.accentSoft, KtpjShapes.card)
+            .clip(KtpjShapes.card)
+            .background(bg)
+            .then(
+                if (task.priority) Modifier.drawBehind { drawRect(stripe, size = Size(5.dp.toPx(), size.height)) }
+                else if (c.isDark) Modifier.border(1.dp, c.line, KtpjShapes.card)
+                else Modifier
+            )
             .padding(KtpjDimens.cardPadding),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -76,17 +94,17 @@ fun TaskRow(
                 Text(
                     (date ?: "+ Fecha") + if (overdue) " · atrasada" else "",
                     style = t.captionStrong,
-                    color = if (overdue) c.accent else if (date != null) c.accentText else c.muted,
+                    color = if (overdue) c.accent else if (date != null) secondary else c.muted,
                     modifier = Modifier
                         .clip(KtpjShapes.pill)
                         .clickable(enabled = !busy, role = Role.Button, onClickLabel = "Cambiar fecha", onClick = onEditDate)
                         .padding(vertical = 4.dp),
                 )
             } else if (date != null) {
-                Text(date, style = t.captionStrong, color = if (overdue) c.accent else c.accentText)
+                Text(date, style = t.captionStrong, color = if (overdue) c.accent else secondary)
             }
-            task.description?.let { Text(it, style = t.caption, color = c.accentText, maxLines = 2) }
-            task.project?.let { ProjectTag(it) }
+            task.description?.let { Text(it, style = t.caption, color = secondary, maxLines = 2) }
+            task.project?.let { ProjectTag(it, secondary) }
             task.app?.let { AppLink(it, enabled = !busy) }
         }
         if (onTogglePriority != null) {
