@@ -178,7 +178,10 @@ object SpurTasks {
     class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
         override suspend fun doWork(): Result {
             if (!Prefs.isConfigured(applicationContext)) return Result.success()
-            return if (sync(applicationContext).isSuccess) Result.success() else Result.retry()
+            DailySummary.arm(applicationContext)
+            val ok = sync(applicationContext).isSuccess
+            if (ok) DailySummary.catchUp(applicationContext)   // respaldo si la alarma de 7/21 se perdió
+            return if (ok) Result.success() else Result.retry()
         }
     }
 }

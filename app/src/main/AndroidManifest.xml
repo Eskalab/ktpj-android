@@ -5,6 +5,8 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Copia de los SMS entrantes para capturar los de Davivienda (no se borran ni se ocultan) -->
     <uses-permission android:name="android.permission.RECEIVE_SMS" />
+    <!-- Rearmar el resumen diario (7:00 / 21:00) después de reiniciar el teléfono -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-feature android:name="android.hardware.telephony" android:required="false" />
 
     <!-- Para elegir la app que abre una tarea: lista solo las apps con ícono en el launcher -->
@@ -59,6 +61,18 @@
         <receiver
             android:name=".ActionReceiver"
             android:exported="false" />
+
+        <receiver
+            android:name=".DailySummaryReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
 
     </application>
 </manifest>

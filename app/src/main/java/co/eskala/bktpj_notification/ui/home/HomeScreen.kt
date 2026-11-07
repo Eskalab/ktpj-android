@@ -40,6 +40,9 @@ import co.eskala.bktpj_notification.ui.components.OutlinePill
 import co.eskala.bktpj_notification.ui.components.ServiceState
 import co.eskala.bktpj_notification.ui.components.StatusChip
 import co.eskala.bktpj_notification.ui.components.TaskRow
+import co.eskala.bktpj_notification.DailySummary
+import co.eskala.bktpj_notification.ui.summary.SummaryBanner
+import co.eskala.bktpj_notification.ui.components.isToday
 import co.eskala.bktpj_notification.ui.theme.KtpjDimens
 import co.eskala.bktpj_notification.ui.theme.KtpjShapes
 import co.eskala.bktpj_notification.ui.theme.KtpjTheme
@@ -71,6 +74,8 @@ fun HomeScreen(
     onTaskEdit: (SpurTask) -> Unit = {},
     onOpenTasks: () -> Unit = {},
     onOpenGastos: () -> Unit = {},
+    summaryBanner: DailySummary.Kind? = null,
+    onOpenSummary: (DailySummary.Kind) -> Unit = {},
 ) {
     val c = KtpjTheme.colors
     val t = KtpjTheme.type
@@ -93,6 +98,7 @@ fun HomeScreen(
         if (state != ServiceState.ACTIVE) {
             StateHint(state, onFixState)
         }
+        summaryBanner?.let { kind -> SummaryBanner(kind, onOpen = { onOpenSummary(kind) }) }
 
         Shortcuts(shortcuts, runningShortcuts, onRunShortcut, onEditShortcut, onAddShortcut)
 
@@ -120,9 +126,11 @@ fun HomeScreen(
             )
         }
 
-        if (tasks.isNotEmpty()) {
-            Section("PRÓXIMAS TAREAS", action = if (tasks.size > 3) "Ver todas" else null, onAction = onOpenTasks) {
-                tasks.take(3).forEach { task ->
+        // Solo las del día en curso, ★ primero; el resto queda en la pestaña Tareas.
+        val todayTasks = tasks.filter { it.due != null && isToday(it.due) }.sortedByDescending { it.priority }
+        if (todayTasks.isNotEmpty()) {
+            Section("TAREAS DE HOY", action = "Ver todas", onAction = onOpenTasks) {
+                todayTasks.forEach { task ->
                     TaskRow(task, busy = task.id in completingTasks, onDone = { onTaskDone(task) }, onTogglePriority = { onTaskPriority(task) }, onEdit = { onTaskEdit(task) })
                 }
             }

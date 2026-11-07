@@ -41,6 +41,10 @@ import co.eskala.bktpj_notification.Prefs
 import co.eskala.bktpj_notification.Shortcut
 import co.eskala.bktpj_notification.ShortcutStore
 import co.eskala.bktpj_notification.SpurTask
+import co.eskala.bktpj_notification.DailySummary
+import co.eskala.bktpj_notification.ui.summary.DaySummaryScreen
+import co.eskala.bktpj_notification.ui.components.isToday
+import co.eskala.bktpj_notification.ui.components.isOverdue
 import co.eskala.bktpj_notification.TaskProject
 import co.eskala.bktpj_notification.SpurTasks
 import co.eskala.bktpj_notification.ui.columns.ColumnPickerScreen
@@ -67,7 +71,7 @@ import kotlinx.coroutines.launch
 private enum class Tab(val label: String) { INICIO("Inicio"), TAREAS("Tareas"), GASTOS("Gastos"), AJUSTES("Ajustes") }
 
 /** Pantallas que se abren encima de las pestañas. */
-private enum class Overlay { MANUAL, SHORTCUT, NEW_TASK, EDIT_TASK, DESTINATIONS, NEON }
+private enum class Overlay { MANUAL, SHORTCUT, NEW_TASK, EDIT_TASK, SUMMARY, DESTINATIONS, NEON }
 
 /** App ya configurada: Inicio (dashboard) / Tareas / Gastos / Ajustes con navegación inferior. */
 @Composable
@@ -84,6 +88,19 @@ fun MainScreen(
 
     var tab by rememberSaveable { mutableStateOf(Tab.INICIO) }
     var overlay by rememberSaveable { mutableStateOf<Overlay?>(null) }
+    // Resumen diario: se abre al tocar su notificación o el aviso de Inicio.
+    var summaryKind by rememberSaveable { mutableStateOf<String?>(null) }
+    var summarySeenTick by remember { mutableStateOf(0) }
+    fun openSummary(kind: DailySummary.Kind) {
+        summaryKind = kind.name
+        overlay = Overlay.SUMMARY
+        DailySummary.markSeen(ctx, kind)
+        summarySeenTick++
+    }
+    val summaryRequest by DailySummary.openRequest.collectAsState()
+    LaunchedEffect(summaryRequest) {
+        summaryRequest?.let { openSummary(it); DailySummary.openRequest.value = null }
+    }
     var editingShortcutId by rememberSaveable { mutableStateOf<String?>(null) }   // null = atajo nuevo
     var editingTaskId by rememberSaveable { mutableStateOf<String?>(null) }
 
@@ -227,6 +244,37 @@ fun MainScreen(
     }
 
     when (overlay) {
+        Overlay.SUMMARY -> {
+            val kind = summaryKind?.let { runCatching { DailySummary.Kind.valueOf(it) }.getOrNull() }
+            if (kind == null) { overlay = null; return }
+            var postponing by remember { mutableStateOf(false) }
+            LaunchedEffect(kind) { SpurTasks.sync(ctx) }
+            DaySummaryScreen(
+                kind = kind,
+                pending = tasks.filter { it.due != null && isToday(it.due) }.sortedByDescending { it.priority },
+                done = doneToday,
+                overdue = tasks.count { it.due != null && isOverdue(it.due) },
+                completing = completingTasks.toSet(),
+                postponing = postponing,
+                onDone = ::completeTask,
+                onPostpone = {
+                    postponing = true
+                    scope.launch {
+                        val n = DailySummary.postponeToday(ctx)
+                        postponing = false
+                        Toast.makeText(ctx, "Listo: ${if (n == 1) "1 tarea pasó" else "$n tareas pasaron"} a mañana. A descansar 🌙", Toast.LENGTH_LONG).show()
+                        overlay = null
+                    }
+                },
+                onOpenTasks = { overlay = null; tab = Tab.TAREAS },
+                onClose = { overlay = null },
+            )
+            followUpOf?.let { done ->
+                NextTaskDialog(done = done, saving = creatingFollowUp, onCreate = ::createFollowUp, onDismiss = { followUpOf = null }, projects = projects)
+            }
+            return
+        }
+
         Overlay.NEW_TASK -> {
             var saving by remember { mutableStateOf(false) }
             NewTaskScreen(
@@ -435,6 +483,10 @@ fun MainScreen(
                     onTaskEdit = { editingTaskId = it.id; overlay = Overlay.EDIT_TASK },
                     onOpenTasks = { tab = Tab.TAREAS },
                     onOpenGastos = { tab = Tab.GASTOS },
+                    summaryBanner = remember(summarySeenTick, tab, overlay) {
+                        DailySummary.currentKind()?.takeIf { !DailySummary.seenToday(ctx, it) }
+                    },
+                    onOpenSummary = ::openSummary,
                 )
 
                 Tab.TAREAS -> TasksScreen(
