@@ -9,6 +9,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.draw.clip
 import androidx.compose.material3.Text
@@ -59,32 +62,173 @@ fun ProjectTag(project: TaskProject, textColor: Color = KtpjTheme.colors.accentT
 }
 
 /**
- * Épica de la tarea: Ninguno · Lavadora · Sucesión papá · … · "+ Nuevo".
- * ("Épica" en la app; en la base y en la web de KTPJ es un Project.)
+ * Épica de la tarea: muestra la elegida (o "Elegir épica…") y abre un buscador, para que no sea una
+ * lista eterna cuando haya muchas. ("Épica" en la app; en la base y en la web de KTPJ es un Project.)
+ * [current] = la épica que ya tenía la tarea, por si no está en [projects] (p. ej. está en pausa o es de la web).
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun ProjectChips(
+fun EpicField(
     projects: List<TaskProject>,
     selectedId: String?,
     onChange: (String?) -> Unit,
     onCreate: (suspend (name: String, prefix: String) -> TaskProject?)? = null,
+    current: TaskProject? = null,
 ) {
-    var adding by rememberSaveable { mutableStateOf(false) }
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Chip("Ninguno", selectedId == null, { onChange(null) })
-        projects.forEach { p -> Chip(p.title, selectedId == p.id, { onChange(p.id) }) }
-        if (onCreate != null) Chip("+ Nueva", false, { adding = true })
+    val c = KtpjTheme.colors
+    var picking by rememberSaveable { mutableStateOf(false) }
+    var created by remember { mutableStateOf<TaskProject?>(null) }
+    val selected = selectedId?.let { id ->
+        projects.firstOrNull { it.id == id } ?: current?.takeIf { it.id == id } ?: created?.takeIf { it.id == id }
     }
-    if (adding && onCreate != null) {
-        NewProjectDialog(
-            used = projects.mapNotNull { it.prefix }.toSet() + UsedPrefixes.boards,
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (selected != null) {
+            Row(
+                Modifier
+                    .heightIn(min = 36.dp)
+                    .clip(KtpjShapes.pill)
+                    .background(c.invBg)
+                    .clickable(role = androidx.compose.ui.semantics.Role.Button, onClickLabel = "Cambiar épica") { picking = true }
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Box(Modifier.size(8.dp).background(projectColor(selected.color, c.invFg), KtpjShapes.pill))
+                Text(
+                    selected.title + (selected.prefix?.let { " · $it" } ?: ""),
+                    style = KtpjTheme.type.captionStrong,
+                    color = c.invFg,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Chip("Quitar", false, { onChange(null) })
+        } else {
+            Chip("Elegir épica…", false, { picking = true })
+        }
+    }
+    if (picking) {
+        EpicPickerDialog(
+            projects = projects,
+            selectedId = selectedId,
+            onPick = { picking = false; onChange(it) },
             onCreate = onCreate,
-            onCreated = { adding = false; onChange(it.id) },
-            onDismiss = { adding = false },
+            onCreated = { created = it; picking = false; onChange(it.id) },
+            onDismiss = { picking = false },
         )
     }
 }
+
+/** Buscador de épicas: escribe y filtra por nombre o prefijo; si no existe, se crea desde ahí. */
+@Composable
+fun EpicPickerDialog(
+    projects: List<TaskProject>,
+    selectedId: String?,
+    onPick: (String?) -> Unit,
+    onCreate: (suspend (name: String, prefix: String) -> TaskProject?)?,
+    onCreated: (TaskProject) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val c = KtpjTheme.colors
+    val t = KtpjTheme.type
+    var query by rememberSaveable { mutableStateOf("") }
+    var creating by rememberSaveable { mutableStateOf(false) }
+    val focus = remember { FocusRequester() }
+    val q = norm(query.trim())
+    // Activas primero, luego en pausa; dentro, por nombre.
+    val shown = projects
+        .filter { q.isEmpty() || norm(it.title).contains(q) || norm(it.prefix.orEmpty()).startsWith(q) }
+        .sortedWith(compareBy<TaskProject> { it.paused }.thenBy { it.title.lowercase() })
+    val exact = projects.any { norm(it.title) == q }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(max = 560.dp)
+                .background(c.bg, KtpjShapes.notification)
+                .padding(KtpjDimens.screenPadding),
+            verticalArrangement = Arrangement.spacedBy(KtpjDimens.blockGapSmall),
+        ) {
+            Text("Elegir épica", style = t.screenTitle, color = c.fg)
+            BasicTextField(
+                value = query,
+                onValueChange = { query = it.take(60) },
+                singleLine = true,
+                textStyle = t.body.copy(color = c.fg),
+                cursorBrush = SolidColor(c.fg),
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Search),
+                modifier = Modifier.fillMaxWidth().focusRequester(focus).semantics { contentDescription = "Buscar épica" },
+                decorationBox = { inner ->
+                    Box(Modifier.fillMaxWidth().border(KtpjDimens.borderField, c.fg, KtpjShapes.row).padding(KtpjDimens.cardPadding)) {
+                        if (query.isEmpty()) Text("Buscar por nombre o prefijo (PAS…)", style = t.body, color = c.muted)
+                        inner()
+                    }
+                },
+            )
+            LazyColumn(Modifier.weight(1f, fill = false)) {
+                if (q.isEmpty()) {
+                    item(key = "none") { PickRow("Sin épica", null, null, false, selectedId == null) { onPick(null) } }
+                }
+                items(shown, key = { it.id }) { p ->
+                    PickRow(p.title, p.prefix, projectColor(p.color, c.muted), p.paused, p.id == selectedId) { onPick(p.id) }
+                }
+                if (onCreate != null && !exact) {
+                    item(key = "new") {
+                        Text(
+                            if (q.isEmpty()) "+ Nueva épica" else "+ Crear \"${query.trim()}\"",
+                            style = t.rowTitle,
+                            color = c.accent,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(KtpjShapes.row)
+                                .clickable(role = androidx.compose.ui.semantics.Role.Button) { creating = true }
+                                .padding(vertical = 12.dp, horizontal = 4.dp),
+                        )
+                    }
+                }
+                if (shown.isEmpty() && q.isNotEmpty()) {
+                    item(key = "empty") { Text("Ninguna épica con ese nombre.", style = t.secondary, color = c.muted, modifier = Modifier.padding(vertical = 8.dp)) }
+                }
+            }
+            SecondaryButton("Cancelar", onClick = onDismiss)
+        }
+    }
+    if (creating && onCreate != null) {
+        NewProjectDialog(
+            used = projects.mapNotNull { it.prefix }.toSet() + UsedPrefixes.boards,
+            onCreate = onCreate,
+            onCreated = { creating = false; onCreated(it) },
+            onDismiss = { creating = false },
+            initialName = query.trim(),
+        )
+    }
+    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+}
+
+@Composable
+private fun PickRow(title: String, prefix: String?, dot: Color?, paused: Boolean, selected: Boolean, onClick: () -> Unit) {
+    val c = KtpjTheme.colors
+    val t = KtpjTheme.type
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(KtpjShapes.row)
+            .background(if (selected) c.card else Color.Transparent)
+            .clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onClick)
+            .padding(vertical = 12.dp, horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        if (dot != null) Box(Modifier.size(10.dp).background(dot, KtpjShapes.pill)) else Box(Modifier.size(10.dp))
+        Text(title, style = t.body, color = if (dot == null) c.muted else c.fg, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        if (paused) Text("⏸", style = t.caption, color = c.muted)
+        prefix?.let { Text(it, style = t.monoSmall, color = c.muted) }
+        if (selected) Text("✓", style = t.captionStrong, color = c.fg)
+    }
+}
+
+private fun norm(s: String) =
+    java.text.Normalizer.normalize(s, java.text.Normalizer.Form.NFD).replace(Regex("\\p{M}"), "").lowercase()
 
 /** Crear épica: solo el nombre. Queda seleccionada al crearlo. */
 @Composable
@@ -93,12 +237,13 @@ private fun NewProjectDialog(
     onCreate: suspend (name: String, prefix: String) -> TaskProject?,
     onCreated: (TaskProject) -> Unit,
     onDismiss: () -> Unit,
+    initialName: String = "",
 ) {
     val c = KtpjTheme.colors
     val t = KtpjTheme.type
     val scope = rememberCoroutineScope()
-    var name by rememberSaveable { mutableStateOf("") }
-    var prefix by rememberSaveable { mutableStateOf("") }
+    var name by rememberSaveable { mutableStateOf(initialName) }
+    var prefix by rememberSaveable { mutableStateOf(suggestPrefix(initialName, used)) }
     var prefixEdited by rememberSaveable { mutableStateOf(false) }   // si lo tocó, ya no se sugiere solo
     var saving by remember { mutableStateOf(false) }
     val focus = remember { FocusRequester() }
@@ -222,6 +367,7 @@ fun EpicRow(project: TaskProject, onOpen: () -> Unit) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(project.title, style = t.rowTitle, color = c.fg, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                 project.prefix?.let { Text(it, style = t.monoSmall, color = c.muted) }
+                if (project.paused) Text("⏸ En pausa", style = t.captionStrong, color = c.muted)
             }
             ProgressBar(project.done, project.total)
         }

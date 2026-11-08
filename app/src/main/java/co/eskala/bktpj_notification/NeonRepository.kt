@@ -216,7 +216,9 @@ object NeonRepository {
                       c.priority IN ('HIGH', 'CRITICAL') AS high,
                       (SELECT substring(l FROM 5) FROM unnest(c.labels) l WHERE l LIKE 'app:%' LIMIT 1) AS app,
                       c.project_id, p.title AS project, p.color AS project_color, p.prefix AS project_prefix,
-                      c.key, c.started_at IS NOT NULL AS started, c.done"""
+                      c.key, c.started_at IS NOT NULL AS started, c.done,
+                      p.paused_at IS NOT NULL AS project_paused,
+                      (SELECT substring(l FROM 7)::int FROM unnest(c.labels) l WHERE l ~ '^pomos:[0-9]{1,2}$' LIMIT 1) AS pomos"""
 
     private fun JSONObject.str(k: String): String? = if (isNull(k)) null else optString(k).takeIf { it.isNotBlank() }
 
@@ -227,9 +229,13 @@ object NeonRepository {
         due = row.str("due"),
         priority = row.optBoolean("high", false),
         app = row.str("app"),
-        project = row.str("project_id")?.let { TaskProject(it, row.str("project").orEmpty(), row.str("project_color"), row.str("project_prefix")) },
+        project = row.str("project_id")?.let {
+            TaskProject(it, row.str("project").orEmpty(), row.str("project_color"), row.str("project_prefix"),
+                paused = row.optBoolean("project_paused", false))
+        },
         key = row.str("key"),
         started = row.optBoolean("started", false),
+        pomos = if (row.isNull("pomos")) null else row.optInt("pomos", 0).takeIf { it > 0 },
     )
 
     private fun JSONObject.taskRows(): List<SpurTask> {
@@ -269,6 +275,7 @@ object NeonRepository {
         high: Boolean,
         app: String? = null,
         projectId: String? = null,
+        pomos: Int? = null,
     ): Result<String> {
         val id = UUID.randomUUID().toString()
         return sql(
@@ -278,10 +285,10 @@ object NeonRepository {
                                   source_message_id, source_from, source_type, due_date,
                                   recurrence, recurrence_days, done, starred, archived, created_at, project_id)
                SELECT $1, $2, $3, n, $4::"Priority",
-                      CASE WHEN $7::text IS NULL THEN '{}'::text[] ELSE ARRAY['app:' || $7::text] END, 'spur_col_todo', $5, 'spur_app', 'spur', $6::timestamp,
+                      array_remove(ARRAY['app:' || $7::text, 'pomos:' || $9::text], NULL), 'spur_col_todo', $5, 'spur_app', 'spur', $6::timestamp,
                       'NONE', '{}', false, false, false, NOW(), $8
                FROM next_ord""",
-            listOf(id, title, description, if (high) "HIGH" else "MEDIUM", "spur_$id", due, app, projectId),
+            listOf(id, title, description, if (high) "HIGH" else "MEDIUM", "spur_$id", due, app, projectId, pomos?.toString()),
         ).mapCatching { assignKey(ctx, id, projectId).getOrThrow(); id }
     }
 
@@ -368,23 +375,23 @@ object NeonRepository {
         ).map { }
 
     /** Edición completa desde el celular: título, detalle, fecha y ★. */
-    suspend fun updateTask(ctx: Context, id: String, title: String, description: String?, due: String?, high: Boolean, app: String?, projectId: String?): Result<Unit> =
+    suspend fun updateTask(ctx: Context, id: String, title: String, description: String?, due: String?, high: Boolean, app: String?, projectId: String?, pomos: Int? = null): Result<Unit> =
         sql(
             ctx,
             // La app vive en las etiquetas como "app:<paquete>"; se conservan las demás etiquetas.
             """UPDATE cards SET title = $2, description = $3, due_date = $4::timestamp, priority = $5::"Priority",
-                      labels = ARRAY(SELECT l FROM unnest(labels) l WHERE l NOT LIKE 'app:%')
-                               || CASE WHEN $6::text IS NULL THEN '{}'::text[] ELSE ARRAY['app:' || $6::text] END,
+                      labels = ARRAY(SELECT l FROM unnest(labels) l WHERE l NOT LIKE 'app:%' AND l NOT LIKE 'pomos:%')
+                               || array_remove(ARRAY['app:' || $6::text, 'pomos:' || $8::text], NULL),
                       project_id = $7
                WHERE id = $1 AND source_type IN ('claude', 'spur')""",
-            listOf(id, title, description, due, if (high) "HIGH" else "MEDIUM", app, projectId),
+            listOf(id, title, description, due, if (high) "HIGH" else "MEDIUM", app, projectId, pomos?.toString()),
         ).map { }
 
     /** Épicas activas (Projects de KTPJ) con prefijo y avance (tarjetas hechas / total). */
     suspend fun fetchProjects(ctx: Context): Result<List<TaskProject>> =
         sql(
             ctx,
-            """SELECT p.id, p.title, p.color, p.prefix,
+            """SELECT p.id, p.title, p.color, p.prefix, p.paused_at IS NOT NULL AS paused,
                       COUNT(c.id) FILTER (WHERE NOT c.archived) AS total,
                       COUNT(c.id) FILTER (WHERE NOT c.archived AND c.done) AS done
                FROM projects p LEFT JOIN cards c ON c.project_id = p.id
@@ -399,9 +406,27 @@ object NeonRepository {
                     row.getString("id"), row.getString("title"), row.str("color"), row.str("prefix"),
                     total = row.opt("total").toString().toIntOrNull() ?: 0,
                     done = row.opt("done").toString().toIntOrNull() ?: 0,
+                    paused = row.optBoolean("paused", false),
                 )
             }
         }
+
+    suspend fun setProjectPaused(ctx: Context, id: String, paused: Boolean): Result<Unit> =
+        sql(
+            ctx,
+            "UPDATE projects SET paused_at = CASE WHEN $2::boolean THEN COALESCE(paused_at, NOW()) END WHERE id = $1",
+            listOf(id, paused),
+        ).map { }
+
+    /** Corre [days] días las fechas de las tareas pendientes de Spur de la épica. */
+    suspend fun shiftEpicDates(ctx: Context, id: String, days: Int): Result<Unit> =
+        sql(
+            ctx,
+            """UPDATE cards SET due_date = due_date + make_interval(days => $2::int)
+               WHERE project_id = $1 AND NOT done AND NOT archived AND due_date IS NOT NULL
+                 AND source_type IN ('claude', 'spur')""",
+            listOf(id, days),
+        ).map { }
 
     /** Prefijos ya usados (épicas y tableros): un ID no puede chocar con otro tablero de KTPJ. */
     suspend fun fetchUsedPrefixes(ctx: Context): Result<Set<String>> =

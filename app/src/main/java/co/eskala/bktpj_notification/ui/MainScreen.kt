@@ -41,17 +41,22 @@ import co.eskala.bktpj_notification.Prefs
 import co.eskala.bktpj_notification.Shortcut
 import co.eskala.bktpj_notification.ShortcutStore
 import co.eskala.bktpj_notification.SpurTask
+import co.eskala.bktpj_notification.active
 import co.eskala.bktpj_notification.FixedStore
 import co.eskala.bktpj_notification.Capture
 import co.eskala.bktpj_notification.ui.balance.BalanceScreen
 import co.eskala.bktpj_notification.EpicCard
 import co.eskala.bktpj_notification.ui.tasks.EpicScreen
+import co.eskala.bktpj_notification.ui.components.TaskDatePicker
 import co.eskala.bktpj_notification.ui.components.UsedPrefixes
 import co.eskala.bktpj_notification.DailySummary
 import co.eskala.bktpj_notification.ui.summary.DaySummaryScreen
 import co.eskala.bktpj_notification.ui.components.isToday
 import co.eskala.bktpj_notification.ui.components.isOverdue
 import co.eskala.bktpj_notification.TaskProject
+import co.eskala.bktpj_notification.Pomodoro
+import co.eskala.bktpj_notification.ui.tasks.PomodoroScreen
+import co.eskala.bktpj_notification.ui.tasks.PomodoroBar
 import co.eskala.bktpj_notification.SpurTasks
 import co.eskala.bktpj_notification.ui.columns.ColumnPickerScreen
 import co.eskala.bktpj_notification.ui.columns.ColumnsState
@@ -77,7 +82,7 @@ import kotlinx.coroutines.launch
 private enum class Tab(val label: String) { INICIO("Inicio"), TAREAS("Tareas"), GASTOS("Gastos"), AJUSTES("Ajustes") }
 
 /** Pantallas que se abren encima de las pestañas. */
-private enum class Overlay { MANUAL, SHORTCUT, NEW_TASK, EDIT_TASK, SUMMARY, EPIC, BALANCE, DESTINATIONS, NEON }
+private enum class Overlay { MANUAL, SHORTCUT, NEW_TASK, EDIT_TASK, SUMMARY, EPIC, BALANCE, POMODORO, DESTINATIONS, NEON }
 
 /** App ya configurada: Inicio (dashboard) / Tareas / Gastos / Ajustes con navegación inferior. */
 @Composable
@@ -107,6 +112,13 @@ fun MainScreen(
     LaunchedEffect(summaryRequest) {
         summaryRequest?.let { openSummary(it); DailySummary.openRequest.value = null }
     }
+    // Pomodoro de la tarea en curso (▶ Empezar). Se abre también desde su notificación.
+    LaunchedEffect(Unit) { Pomodoro.load(ctx) }
+    val pomo by Pomodoro.state.collectAsState()
+    val pomoRequest by Pomodoro.openRequest.collectAsState()
+    LaunchedEffect(pomoRequest) {
+        if (pomoRequest) { Pomodoro.openRequest.value = false; if (Pomodoro.load(ctx) != null) overlay = Overlay.POMODORO }
+    }
     var editingShortcutId by rememberSaveable { mutableStateOf<String?>(null) }   // null = atajo nuevo
     var editingTaskId by rememberSaveable { mutableStateOf<String?>(null) }
 
@@ -125,6 +137,8 @@ fun MainScreen(
     // Tareas de Claude (/spur): se leen al abrir; el worker las revisa cada ~15 min en segundo plano.
     LaunchedEffect(Unit) { SpurTasks.sync(ctx) }
     val tasks by SpurTasks.tasks.collectAsState()
+    // Día a día (Inicio, Tareas, resumen): sin las tareas de épicas en pausa.
+    val activeTasks = tasks.filter { it.active }
     val doneToday by SpurTasks.doneToday.collectAsState()
     val completingTasks = remember { mutableStateListOf<String>() }
     var refreshingTasks by remember { mutableStateOf(false) }
@@ -202,8 +216,13 @@ fun MainScreen(
         if (task.id in completingTasks) return
         completingTasks += task.id
         scope.launch {
-            val r = SpurTasks.setStarted(ctx, task.id, !task.started)
+            val starting = !task.started
+            val r = SpurTasks.setStarted(ctx, task.id, starting)
             completingTasks -= task.id
+            if (r.isSuccess) {
+                if (starting) { Pomodoro.begin(ctx, task); overlay = Overlay.POMODORO }
+                else Pomodoro.stop(ctx, task.id)
+            }
             if (r.isFailure) Toast.makeText(ctx, "No se pudo cambiar: ${r.exceptionOrNull()?.message}", Toast.LENGTH_LONG).show()
         }
     }
@@ -214,6 +233,7 @@ fun MainScreen(
         scope.launch {
             val r = SpurTasks.markDone(ctx, task.id)
             completingTasks -= task.id
+            if (r.isSuccess) Pomodoro.stop(ctx, task.id)
             if (r.isFailure) Toast.makeText(ctx, "No se pudo marcar: ${r.exceptionOrNull()?.message}", Toast.LENGTH_LONG).show()
             else followUpOf = task
         }
@@ -287,6 +307,21 @@ fun MainScreen(
     }
 
     when (overlay) {
+        Overlay.POMODORO -> {
+            val p = pomo
+            if (p == null) { overlay = null; return }
+            PomodoroScreen(
+                state = p,
+                onBack = { overlay = null },
+                onTaskDone = {
+                    val task = tasks.firstOrNull { it.id == p.taskId }
+                    overlay = null
+                    if (task != null) completeTask(task) else Pomodoro.stop(ctx)
+                },
+            )
+            return
+        }
+
         Overlay.BALANCE -> {
             BalanceScreen(captures = captures, fixed = fixed, onBack = { overlay = null })
             return
@@ -299,8 +334,42 @@ fun MainScreen(
             LaunchedEffect(epicId, tasks, doneToday) {
                 NeonRepository.fetchEpicCards(ctx, project.id).getOrNull()?.let { epicCards = it }
             }
+            var pausing by remember { mutableStateOf(false) }
+            var askResume by remember { mutableStateOf(false) }
+            fun setPaused(paused: Boolean, shift: Int = 0) {
+                pausing = true
+                scope.launch {
+                    val r = SpurTasks.setEpicPaused(ctx, project.id, paused, shift)
+                    pausing = false
+                    if (r.isSuccess) {
+                        projects = projects.map { if (it.id == project.id) it.copy(paused = paused) else it }
+                        Toast.makeText(
+                            ctx,
+                            if (paused) "⏸ ${project.title} en pausa: sus tareas no salen en Hoy ni te recuerdan"
+                            else "▶ ${project.title} reanudada" + if (shift != 0) " (fechas corridas $shift días)" else "",
+                            Toast.LENGTH_LONG,
+                        ).show()
+                    } else Toast.makeText(ctx, "No se pudo: ${r.exceptionOrNull()?.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+            if (askResume) {
+                // Retomar: la tarea pendiente más próxima pasa a la fecha elegida y las demás se corren igual.
+                val first = epicCards.orEmpty().filter { !it.done && it.fromSpur }.mapNotNull { it.task.due }.minOrNull()
+                TaskDatePicker(
+                    initial = null,
+                    onPick = { picked ->
+                        askResume = false
+                        val shift = if (picked != null && first != null) daysBetween(first, picked) else 0
+                        setPaused(false, shift)
+                    },
+                    onDismiss = { askResume = false },
+                )
+            }
             EpicScreen(
-                project = project,
+                pausing = pausing,
+                onPause = { setPaused(true) },
+                onResume = { askResume = true },
+                project = project.copy(paused = projects.firstOrNull { it.id == project.id }?.paused ?: project.paused),
                 cards = epicCards,
                 completing = completingTasks.toSet(),
                 onDone = ::completeTask,
@@ -322,9 +391,9 @@ fun MainScreen(
             LaunchedEffect(kind) { SpurTasks.sync(ctx) }
             DaySummaryScreen(
                 kind = kind,
-                pending = tasks.filter { it.due != null && isToday(it.due) }.sortedByDescending { it.priority },
+                pending = activeTasks.filter { it.due != null && isToday(it.due) }.sortedByDescending { it.priority },
                 done = doneToday,
-                overdue = tasks.count { it.due != null && isOverdue(it.due) },
+                overdue = activeTasks.count { it.due != null && isOverdue(it.due) },
                 completing = completingTasks.toSet(),
                 postponing = postponing,
                 onDone = ::completeTask,
@@ -356,7 +425,7 @@ fun MainScreen(
                 onSave = { task ->
                     saving = true
                     scope.launch {
-                        val r = SpurTasks.create(ctx, task.title, task.description, task.due, task.priority, task.app, task.projectId)
+                        val r = SpurTasks.create(ctx, task.title, task.description, task.due, task.priority, task.app, task.projectId, task.pomos)
                         saving = false
                         if (r.isSuccess) {
                             Toast.makeText(ctx, if (task.priority) "★ Tarea creada: el día de su fecha te la recuerdo cada hora" else "Tarea creada", Toast.LENGTH_SHORT).show()
@@ -388,6 +457,7 @@ fun MainScreen(
                         val r = SpurTasks.update(
                             ctx, original.id, task.title, task.description, task.due, task.priority, task.app,
                             task.projectId?.let { id -> projects.firstOrNull { it.id == id } ?: original.project?.takeIf { it.id == id } },
+                            task.pomos,
                         )
                         saving = false
                         if (r.isSuccess) {
@@ -550,7 +620,7 @@ fun MainScreen(
                         overlay = Overlay.SHORTCUT
                     },
                     onFixState = { if (state == ServiceState.NO_ACCESS) onOpenAccessSettings() else tab = Tab.AJUSTES },
-                    tasks = tasks,
+                    tasks = activeTasks,
                     completingTasks = completingTasks.toSet(),
                     onTaskDone = ::completeTask,
                     onTaskPriority = ::togglePriority,
@@ -572,7 +642,7 @@ fun MainScreen(
                 )
 
                 Tab.TAREAS -> TasksScreen(
-                    tasks = tasks,
+                    tasks = activeTasks,
                     completing = completingTasks.toSet(),
                     refreshing = refreshingTasks,
                     onDone = ::completeTask,
@@ -621,6 +691,7 @@ fun MainScreen(
                 )
             }
         }
+        pomo?.let { PomodoroBar(it, onOpen = { overlay = Overlay.POMODORO }) }
         BottomNav(tab, onSelect = { tab = it })
     }
 
@@ -658,4 +729,10 @@ private fun BottomNav(current: Tab, onSelect: (Tab) -> Unit) {
             }
         }
     }
+}
+
+/** Días de [from] a [to] (YYYY-MM-DD). */
+private fun daysBetween(from: String, to: String): Int {
+    val f = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }
+    return Math.round((f.parse(to)!!.time - f.parse(from)!!.time) / 86_400_000.0).toInt()
 }

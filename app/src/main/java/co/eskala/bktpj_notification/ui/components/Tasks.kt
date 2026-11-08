@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -127,6 +128,14 @@ fun TaskRow(
                     )
                 } else if (task.started) {
                     Text("● En curso", style = t.captionStrong, color = c.blue)
+                }
+                val pomosDone = co.eskala.bktpj_notification.Pomodoro.counts.collectAsState().value[task.id] ?: 0
+                if (task.pomos != null || pomosDone > 0) {
+                    Text(
+                        "🍅 $pomosDone" + (task.pomos?.let { "/$it" } ?: ""),
+                        style = t.captionStrong,
+                        color = if (task.pomos != null && pomosDone >= task.pomos) c.green else secondary,
+                    )
                 }
             }
             task.description?.let { Text(it, style = t.caption, color = secondary, maxLines = 2) }

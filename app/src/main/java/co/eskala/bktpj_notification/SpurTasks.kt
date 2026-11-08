@@ -25,6 +25,7 @@ data class SpurTask(
     val project: TaskProject? = null, // épica (Project de KTPJ), opcional
     val key: String? = null,          // ID tipo Jira: LAV-3, o SP-12 sin épica
     val started: Boolean = false,     // "en curso"
+    val pomos: Int? = null,           // pomodoros estimados (etiqueta "pomos:N")
 )
 
 /**
@@ -38,7 +39,11 @@ data class TaskProject(
     val prefix: String? = null,
     val total: Int = 0,
     val done: Int = 0,
+    val paused: Boolean = false,   // en pausa: sus tareas no salen en Hoy ni recuerdan
 )
+
+/** Tarea visible en el día a día: su épica no está en pausa. */
+val SpurTask.active: Boolean get() = project?.paused != true
 
 /** Tarjeta de una épica: tarea de Spur (se puede actuar) o tarjeta de la web (solo lectura). */
 data class EpicCard(
@@ -127,7 +132,7 @@ object SpurTasks {
                         edit.putLong(REMIND_PREFIX + task.id, now)
                     }
                     // Recordatorio cada hora solo para ★ de hoy (o atrasadas): las de días siguientes esperan su día.
-                    task.priority && remindsToday(task) && now - last >= REMIND_EVERY_MS && inReminderHours() -> {
+                    task.priority && task.active && remindsToday(task) && now - last >= REMIND_EVERY_MS && inReminderHours() -> {
                         SpurNotifications.showTask(ctx, task, reminder = true)
                         edit.putLong(REMIND_PREFIX + task.id, now)
                     }
@@ -158,8 +163,8 @@ object SpurTasks {
      * Crea una tarea desde el celular. Se marca como vista para no notificar algo que uno mismo
      * acaba de escribir; si es prioritaria, el primer recordatorio llega en una hora.
      */
-    suspend fun create(ctx: Context, title: String, description: String?, due: String?, high: Boolean, app: String? = null, projectId: String? = null): Result<String> {
-        val r = NeonRepository.insertTask(ctx, title, description, due, high, app, projectId)
+    suspend fun create(ctx: Context, title: String, description: String?, due: String?, high: Boolean, app: String? = null, projectId: String? = null, pomos: Int? = null): Result<String> {
+        val r = NeonRepository.insertTask(ctx, title, description, due, high, app, projectId, pomos)
         r.getOrNull()?.let { id ->
             val sp = ctx.getSharedPreferences(SEEN_FILE, Context.MODE_PRIVATE)
             val seen = sp.getStringSet(SEEN_KEY, emptySet()).orEmpty()
@@ -186,22 +191,30 @@ object SpurTasks {
     }
 
     /** Guarda la edición. Si se acaba de marcar ★, el primer recordatorio llega en una hora. */
-    suspend fun update(ctx: Context, id: String, title: String, description: String?, due: String?, high: Boolean, app: String?, project: TaskProject?): Result<Unit> {
+    suspend fun update(ctx: Context, id: String, title: String, description: String?, due: String?, high: Boolean, app: String?, project: TaskProject?, pomos: Int? = null): Result<Unit> {
         val before = _tasks.value.firstOrNull { it.id == id }
-        val r = NeonRepository.updateTask(ctx, id, title, description, due, high, app, project?.id)
+        val r = NeonRepository.updateTask(ctx, id, title, description, due, high, app, project?.id, pomos)
         if (r.isSuccess) {
             // Cambió de épica: nuevo ID con el prefijo de la nueva (SP-7 → LAV-4), como en Jira.
             val newKey = if (before != null && before.project?.id != project?.id) {
                 NeonRepository.assignKey(ctx, id, project?.id).getOrNull() ?: before.key
             } else before?.key
             _tasks.value = _tasks.value
-                .map { if (it.id == id) it.copy(title = title, description = description, due = due, priority = high, app = app, project = project, key = newKey) else it }
+                .map { if (it.id == id) it.copy(title = title, description = description, due = due, priority = high, app = app, project = project, key = newKey, pomos = pomos) else it }
                 .sortedByDescending { it.priority }
             if (high && before?.priority != true) {
                 ctx.getSharedPreferences(SEEN_FILE, Context.MODE_PRIVATE).edit()
                     .putLong(REMIND_PREFIX + id, System.currentTimeMillis()).apply()
             }
         }
+        return r
+    }
+
+    /** Pausa o reanuda una épica. Al reanudar, [shiftDays] corre las fechas de sus pendientes. */
+    suspend fun setEpicPaused(ctx: Context, projectId: String, paused: Boolean, shiftDays: Int = 0): Result<Unit> {
+        val r = NeonRepository.setProjectPaused(ctx, projectId, paused)
+            .mapCatching { if (!paused && shiftDays != 0) NeonRepository.shiftEpicDates(ctx, projectId, shiftDays).getOrThrow() }
+        if (r.isSuccess) sync(ctx)
         return r
     }
 

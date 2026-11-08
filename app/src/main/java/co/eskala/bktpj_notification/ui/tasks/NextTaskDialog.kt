@@ -31,7 +31,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import co.eskala.bktpj_notification.SpurTask
 import co.eskala.bktpj_notification.TaskProject
-import co.eskala.bktpj_notification.ui.components.ProjectChips
+import co.eskala.bktpj_notification.ui.components.EpicField
 import co.eskala.bktpj_notification.ui.components.Chip
 import co.eskala.bktpj_notification.ui.components.DueChips
 import co.eskala.bktpj_notification.ui.components.PrimaryButton
@@ -99,7 +99,7 @@ fun NextTaskDialog(
                 },
             )
             DueChips(due, { due = it })
-            ProjectChips(projects, projectId, { projectId = it }, onCreateProject)
+            EpicField(projects, projectId, { projectId = it }, onCreateProject, done.project)
             Chip("★ Prioritaria", priority, { priority = !priority })
 
             Column(verticalArrangement = Arrangement.spacedBy(KtpjDimens.cardGapSmall)) {

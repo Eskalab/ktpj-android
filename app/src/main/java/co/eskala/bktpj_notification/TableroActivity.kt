@@ -36,6 +36,7 @@ class TableroActivity : ComponentActivity() {
         SpurTasks.schedule(this)
         DailySummary.arm(this)
         handleOpenSummary(intent)
+        handleOpenPomodoro(intent)
         hasListenerAccess = NotificationAccess.isGranted(this)
         theme = ThemeMode.fromKey(Prefs.getTheme(this))
         applySystemBars()
@@ -70,12 +71,19 @@ class TableroActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleOpenSummary(intent)
+        handleOpenPomodoro(intent)
     }
 
     private fun handleOpenSummary(intent: Intent?) {
         val kind = intent?.getStringExtra(DailySummary.EXTRA_OPEN_SUMMARY) ?: return
         DailySummary.openRequest.value = runCatching { DailySummary.Kind.valueOf(kind) }.getOrNull()
         intent.removeExtra(DailySummary.EXTRA_OPEN_SUMMARY)   // no reabrir al rotar
+    }
+
+    private fun handleOpenPomodoro(intent: Intent?) {
+        if (intent?.getBooleanExtra(Pomodoro.EXTRA_OPEN, false) != true) return
+        Pomodoro.openRequest.value = true
+        intent.removeExtra(Pomodoro.EXTRA_OPEN)
     }
 
     override fun onResume() {

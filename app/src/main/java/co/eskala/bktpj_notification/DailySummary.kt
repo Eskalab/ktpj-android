@@ -164,9 +164,9 @@ object DailySummary {
 
     /** Pendientes con fecha de hoy, ★ primero. */
     fun todayTasks(): List<SpurTask> =
-        SpurTasks.tasks.value.filter { it.due != null && isToday(it.due) }.sortedByDescending { it.priority }
+        SpurTasks.tasks.value.filter { it.active && it.due != null && isToday(it.due) }.sortedByDescending { it.priority }
 
-    fun overdueCount(): Int = SpurTasks.tasks.value.count { it.due != null && isOverdue(it.due) }
+    fun overdueCount(): Int = SpurTasks.tasks.value.count { it.active && it.due != null && isOverdue(it.due) }
 
     /** Frase del día según el momento y cómo va el día. */
     fun phrase(kind: Kind, pending: Int, done: Int): String = when (kind) {
@@ -257,6 +257,9 @@ class DailySummaryReceiver : BroadcastReceiver() {
 /** Tras reiniciar el teléfono las alarmas se pierden: se vuelven a armar. */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action == Intent.ACTION_BOOT_COMPLETED) DailySummary.arm(context.applicationContext)
+        if (intent.action == Intent.ACTION_BOOT_COMPLETED) {
+            DailySummary.arm(context.applicationContext)
+            Pomodoro.rearm(context.applicationContext)
+        }
     }
 }

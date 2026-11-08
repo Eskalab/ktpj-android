@@ -29,7 +29,8 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import co.eskala.bktpj_notification.SpurTask
 import co.eskala.bktpj_notification.TaskProject
-import co.eskala.bktpj_notification.ui.components.ProjectChips
+import co.eskala.bktpj_notification.ui.components.EpicField
+import co.eskala.bktpj_notification.ui.components.PomosField
 import co.eskala.bktpj_notification.ui.components.Chip
 import co.eskala.bktpj_notification.ui.components.AppField
 import co.eskala.bktpj_notification.ui.components.DueChips
@@ -41,7 +42,7 @@ import co.eskala.bktpj_notification.ui.theme.KtpjTheme
 import co.eskala.bktpj_notification.ui.theme.ThemeMode
 
 /** Datos del formulario "Nueva tarea"; [due] en formato YYYY-MM-DD. */
-data class NewTask(val title: String, val description: String?, val due: String?, val priority: Boolean, val app: String? = null, val projectId: String? = null)
+data class NewTask(val title: String, val description: String?, val due: String?, val priority: Boolean, val app: String? = null, val projectId: String? = null, val pomos: Int? = null)
 
 /** Nueva tarea desde el celular: queda en el tablero Spur igual que las que llegan desde Claude (/spur). */
 @Composable
@@ -62,6 +63,7 @@ fun NewTaskScreen(
     var priority by rememberSaveable { mutableStateOf(initial?.priority ?: false) }
     var app by rememberSaveable { mutableStateOf(initial?.app) }
     var projectId by rememberSaveable { mutableStateOf(initial?.project?.id) }
+    var pomos by rememberSaveable { mutableStateOf(initial?.pomos ?: 0) }
     val canSave = !saving && title.isNotBlank()
 
     fun build() = NewTask(
@@ -71,6 +73,7 @@ fun NewTaskScreen(
         priority = priority,
         app = app,
         projectId = projectId,
+        pomos = pomos.takeIf { it > 0 },
     )
 
     Column(Modifier.fillMaxSize().background(c.bg).safeDrawingPadding()) {
@@ -93,7 +96,8 @@ fun NewTaskScreen(
             Field("Fecha") {
                 DueChips(due, { due = it })
             }
-            Field("Épica (opcional)") { ProjectChips(projects, projectId, { projectId = it }, onCreateProject) }
+            Field("Épica (opcional)") { EpicField(projects, projectId, { projectId = it }, onCreateProject, initial?.project) }
+            Field("Pomodoros estimados") { PomosField(pomos, { pomos = it }) }
             Field("App (opcional)") {
                 AppField(app, { app = it })
             }

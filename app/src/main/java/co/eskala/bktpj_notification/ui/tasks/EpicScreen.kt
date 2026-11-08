@@ -30,6 +30,8 @@ import co.eskala.bktpj_notification.EpicCard
 import co.eskala.bktpj_notification.SpurTask
 import co.eskala.bktpj_notification.TaskProject
 import co.eskala.bktpj_notification.ui.components.DoneTaskRow
+import co.eskala.bktpj_notification.ui.components.OutlinePill
+import androidx.compose.foundation.layout.Spacer
 import co.eskala.bktpj_notification.ui.components.ProgressBar
 import co.eskala.bktpj_notification.ui.components.TaskRow
 import co.eskala.bktpj_notification.ui.components.dueLabel
@@ -52,6 +54,9 @@ fun EpicScreen(
     onTogglePriority: (SpurTask) -> Unit,
     onEdit: (SpurTask) -> Unit,
     onBack: () -> Unit,
+    pausing: Boolean = false,
+    onPause: () -> Unit = {},
+    onResume: () -> Unit = {},
 ) {
     val c = KtpjTheme.colors
     val t = KtpjTheme.type
@@ -78,6 +83,12 @@ fun EpicScreen(
                                 .clickable(role = Role.Button, onClick = onBack)
                                 .padding(vertical = 8.dp),
                         )
+                        Spacer(Modifier.weight(1f))
+                        OutlinePill(
+                            if (pausing) "…" else if (project.paused) "▶ Reanudar" else "⏸ Pausar",
+                            onClick = if (project.paused) onResume else onPause,
+                            enabled = !pausing,
+                        )
                     }
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Box(Modifier.size(14.dp).background(projectColor(project.color, c.muted), KtpjShapes.pill))
@@ -88,6 +99,13 @@ fun EpicScreen(
                         )
                     }
                     Text(project.title, style = t.screenTitle, color = c.fg, modifier = Modifier.semantics { heading() })
+                    if (project.paused) {
+                        Text(
+                            "⏸ En pausa: sus tareas no salen en Hoy ni te recuerdan. Al reanudar eliges desde qué fecha retomas.",
+                            style = t.secondary,
+                            color = c.muted,
+                        )
+                    }
                     if (cards != null && list.isNotEmpty()) {
                         Text(
                             "${done.size} de ${list.size} hechas" + if (inProgress.isNotEmpty()) " · ${inProgress.size} en curso" else "",
