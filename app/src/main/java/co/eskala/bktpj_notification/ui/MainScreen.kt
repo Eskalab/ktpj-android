@@ -82,7 +82,7 @@ import kotlinx.coroutines.launch
 private enum class Tab(val label: String) { INICIO("Inicio"), TAREAS("Tareas"), GASTOS("Gastos"), AJUSTES("Ajustes") }
 
 /** Pantallas que se abren encima de las pestañas. */
-private enum class Overlay { MANUAL, SHORTCUT, NEW_TASK, EDIT_TASK, SUMMARY, EPIC, BALANCE, POMODORO, DESTINATIONS, NEON }
+private enum class Overlay { MANUAL, SHORTCUT, NEW_TASK, EDIT_TASK, SUMMARY, EPIC, BALANCE, POMODORO, NEW_HABIT, EDIT_HABIT, HABIT, DESTINATIONS, NEON }
 
 /** App ya configurada: Inicio (dashboard) / Tareas / Gastos / Ajustes con navegación inferior. */
 @Composable
@@ -137,6 +137,11 @@ fun MainScreen(
     // Tareas de Claude (/spur): se leen al abrir; el worker las revisa cada ~15 min en segundo plano.
     LaunchedEffect(Unit) { SpurTasks.sync(ctx) }
     val tasks by SpurTasks.tasks.collectAsState()
+    // Hábitos: se leen junto con las tareas; sin los de épicas en pausa.
+    val habits by co.eskala.bktpj_notification.Habits.habits.collectAsState()
+    val habitsError by co.eskala.bktpj_notification.Habits.error.collectAsState()
+    val activeHabits = habits.filter { it.active }
+    var habitId by rememberSaveable { mutableStateOf<String?>(null) }
     // Día a día (Inicio, Tareas, resumen): sin las tareas de épicas en pausa.
     val activeTasks = tasks.filter { it.active }
     val doneToday by SpurTasks.doneToday.collectAsState()
@@ -307,6 +312,47 @@ fun MainScreen(
     }
 
     when (overlay) {
+        Overlay.HABIT -> {
+            val h = habits.firstOrNull { it.id == habitId }
+            if (h == null) { overlay = null; return }
+            co.eskala.bktpj_notification.ui.tasks.HabitScreen(h, onBack = { overlay = null }, onEdit = { overlay = Overlay.EDIT_HABIT })
+            return
+        }
+
+        Overlay.NEW_HABIT, Overlay.EDIT_HABIT -> {
+            val original = if (overlay == Overlay.EDIT_HABIT) habits.firstOrNull { it.id == habitId } else null
+            if (overlay == Overlay.EDIT_HABIT && original == null) { overlay = null; return }
+            var saving by remember { mutableStateOf(false) }
+            co.eskala.bktpj_notification.ui.tasks.NewHabitScreen(
+                initial = original,
+                projects = projects,
+                onCreateProject = createProject,
+                saving = saving,
+                onSwitchToTask = if (original == null) ({ overlay = Overlay.NEW_TASK }) else null,
+                onSave = { d ->
+                    saving = true
+                    scope.launch {
+                        val r = if (original == null) co.eskala.bktpj_notification.Habits.create(ctx, d).map { }
+                        else co.eskala.bktpj_notification.Habits.update(ctx, original.id, d)
+                        saving = false
+                        if (r.isSuccess) {
+                            val err = co.eskala.bktpj_notification.Habits.error.value
+                            Toast.makeText(
+                                ctx,
+                                if (err != null) "Hábito guardado, pero no se pueden leer los hábitos: falta aplicar la migración habit_checks en la base."
+                                else if (original == null) "↻ Hábito creado" else "Hábito actualizado",
+                                if (err != null) Toast.LENGTH_LONG else Toast.LENGTH_SHORT,
+                            ).show()
+                            overlay = if (original == null) null else Overlay.HABIT
+                            if (original == null) tab = Tab.TAREAS
+                        } else Toast.makeText(ctx, "No se pudo guardar: ${r.exceptionOrNull()?.message}", Toast.LENGTH_LONG).show()
+                    }
+                },
+                onCancel = { overlay = if (original == null) null else Overlay.HABIT },
+            )
+            return
+        }
+
         Overlay.POMODORO -> {
             val p = pomo
             if (p == null) { overlay = null; return }
@@ -418,6 +464,7 @@ fun MainScreen(
         Overlay.NEW_TASK -> {
             var saving by remember { mutableStateOf(false) }
             NewTaskScreen(
+                onSwitchToHabit = { overlay = Overlay.NEW_HABIT },
                 initialDue = newTaskDue,
                 projects = projects,
                 onCreateProject = createProject,
@@ -639,6 +686,8 @@ fun MainScreen(
                         DailySummary.currentKind()?.takeIf { !DailySummary.seenToday(ctx, it) }
                     },
                     onOpenSummary = ::openSummary,
+                    habits = activeHabits,
+                    onOpenHabit = { habitId = it.id; overlay = Overlay.HABIT },
                 )
 
                 Tab.TAREAS -> TasksScreen(
@@ -654,6 +703,10 @@ fun MainScreen(
                     epics = projects,
                     onOpenEpic = ::openEpic,
                     doneToday = doneToday,
+                    habits = activeHabits,
+                    habitsError = habitsError,
+                    onOpenHabit = { habitId = it.id; overlay = Overlay.HABIT },
+                    onAddHabit = { overlay = Overlay.NEW_HABIT },
                     onSetDue = { task, due ->
                         scope.launch {
                             val r = SpurTasks.setDue(ctx, task.id, due)

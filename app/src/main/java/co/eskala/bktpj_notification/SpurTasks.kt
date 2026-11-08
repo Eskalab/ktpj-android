@@ -117,6 +117,7 @@ object SpurTasks {
 
     suspend fun sync(ctx: Context): Result<List<SpurTask>> {
         val r = NeonRepository.fetchClaudeTasks(ctx)
+        if (r.isSuccess) Habits.sync(ctx)   // aparte: si falla (falta la migración), las tareas siguen
         r.getOrNull()?.let { list ->
             _tasks.value = list
             refreshDoneToday(ctx)

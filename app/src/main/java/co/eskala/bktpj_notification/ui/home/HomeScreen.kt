@@ -83,6 +83,8 @@ fun HomeScreen(
     onOpenGastos: () -> Unit = {},
     summaryBanner: DailySummary.Kind? = null,
     onOpenSummary: (DailySummary.Kind) -> Unit = {},
+    habits: List<co.eskala.bktpj_notification.Habit> = emptyList(),
+    onOpenHabit: (co.eskala.bktpj_notification.Habit) -> Unit = {},
 ) {
     val c = KtpjTheme.colors
     val t = KtpjTheme.type
@@ -135,6 +137,14 @@ fun HomeScreen(
                 onClick = onOpenBalance,
                 modifier = Modifier.weight(1f),
             )
+        }
+
+        // Hábitos que tocan hoy: pendientes primero.
+        val todayHabits = habits.filter { it.dueToday }.sortedBy { it.doneToday }
+        if (todayHabits.isNotEmpty()) {
+            Section("HÁBITOS · ${todayHabits.count { it.doneToday }}/${todayHabits.size}", action = "Ver todos", onAction = onOpenTasks) {
+                todayHabits.forEach { h -> co.eskala.bktpj_notification.ui.components.HabitRow(h, onOpen = { onOpenHabit(h) }) }
+            }
         }
 
         // Solo las del día en curso, ★ primero; el resto queda en la pestaña Tareas.

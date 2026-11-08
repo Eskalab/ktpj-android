@@ -18,6 +18,7 @@ class ActionReceiver : BroadcastReceiver() {
         const val ACTION_RETRY   = "co.eskala.bktpj_notification.ACTION_RETRY"
         const val ACTION_DISMISS = "co.eskala.bktpj_notification.ACTION_DISMISS"
         const val ACTION_TASK_DONE = "co.eskala.bktpj_notification.ACTION_TASK_DONE"
+        const val ACTION_HABIT_DONE = "co.eskala.bktpj_notification.ACTION_HABIT_DONE"
         const val EXTRA_TASK_ID = "extra_task_id"
         const val EXTRA_TITLE     = "extra_title"
         const val EXTRA_AMOUNT    = "extra_amount"
@@ -32,6 +33,7 @@ class ActionReceiver : BroadcastReceiver() {
         when (intent.action) {
             ACTION_RETRY -> return retry(context, intent)
             ACTION_TASK_DONE -> return taskDone(context, intent)
+            ACTION_HABIT_DONE -> return habitDone(context, intent)
             ACTION_DISMISS -> {
                 // Solo cierra la notificación: la captura sigue en el historial para reintentar después.
                 cancel(context, intent)
@@ -100,6 +102,22 @@ class ActionReceiver : BroadcastReceiver() {
                 withContext(Dispatchers.Main) {
                     val msg = if (r.isSuccess) "Tarea completada" else "No se pudo completar: ${r.exceptionOrNull()?.message}"
                     Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                }
+            } finally {
+                pending.finish()
+            }
+        }
+    }
+
+    private fun habitDone(context: Context, intent: Intent) {
+        val id = intent.getStringExtra(EXTRA_TASK_ID) ?: return
+        val amount = intent.getIntExtra(EXTRA_AMOUNT, -1).takeIf { it > 0 }
+        val pending = goAsync()
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val r = Habits.check(context, id, amount)
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, if (r.isSuccess) "✓ Hábito de hoy cumplido" else "No se pudo: ${r.exceptionOrNull()?.message}", Toast.LENGTH_SHORT).show()
                 }
             } finally {
                 pending.finish()

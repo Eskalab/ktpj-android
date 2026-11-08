@@ -250,6 +250,7 @@ object NeonRepository {
             """SELECT $TASK_COLS
                FROM cards c LEFT JOIN projects p ON p.id = c.project_id
                WHERE c.source_type IN ('claude', 'spur') AND NOT c.done AND NOT c.archived
+                 AND c.recurrence = 'NONE'   -- los hábitos van aparte (Habits)
                ORDER BY c.priority IN ('HIGH', 'CRITICAL') DESC, c.created_at DESC
                LIMIT 80""",
             emptyList()
@@ -333,6 +334,7 @@ object NeonRepository {
                LEFT JOIN columns co ON co.id = c.column_id
                LEFT JOIN boards b ON b.id = co.board_id
                WHERE c.project_id = $1 AND NOT c.archived
+                 AND NOT (c.source_type = 'spur' AND c.recurrence <> 'NONE')
                ORDER BY c.done, c.started_at IS NULL, c.due_date NULLS LAST, c.done_at DESC NULLS LAST, c.created_at""",
             listOf(projectId),
         ).mapCatching { obj ->
@@ -462,4 +464,97 @@ object NeonRepository {
 
     suspend fun markTaskDone(ctx: Context, id: String): Result<Unit> =
         sql(ctx, "UPDATE cards SET done = true WHERE id = $1 AND source_type IN ('claude', 'spur')", listOf(id)).map { }
+
+    // ── Hábitos ── tarjeta de Spur con recurrence DAILY (días en recurrence_days, 0 = domingo) que nunca
+    // se marca hecha; cada día cumplido es una fila en habit_checks. Meta y aviso en etiquetas.
+
+    private fun habitLabels(goal: Int?, unit: String?, remindAt: Int?, app: String?): String =
+        listOfNotNull(
+            goal?.let { "habit_goal:$it" },
+            unit?.takeIf { it.isNotBlank() }?.let { "habit_unit:${it.trim()}" },
+            remindAt?.let { "habit_at:$it" },
+            app?.let { "app:$it" },
+        ).joinToString(",", "{", "}") { "\"" + it.replace("\\", "").replace("\"", "") + "\"" }
+
+    private fun intArray(days: Set<Int>) = days.sorted().joinToString(",", "{", "}")
+
+    suspend fun fetchHabits(ctx: Context, sinceDay: String): Result<List<Habit>> =
+        sql(
+            ctx,
+            """SELECT c.id, c.title, c.key, array_to_string(c.recurrence_days, ',') AS days, array_to_json(c.labels)::text AS labels,
+                      c.project_id, p.title AS project, p.color AS project_color, p.prefix AS project_prefix,
+                      p.paused_at IS NOT NULL AS project_paused,
+                      (SELECT string_agg(to_char(h.day, 'YYYY-MM-DD') || '=' || COALESCE(h.amount::text, ''), ';')
+                         FROM habit_checks h WHERE h.card_id = c.id AND h.day >= $1::date) AS checks
+               FROM cards c LEFT JOIN projects p ON p.id = c.project_id
+               WHERE c.source_type = 'spur' AND c.recurrence <> 'NONE' AND NOT c.done AND NOT c.archived
+               ORDER BY c.created_at""",
+            listOf(sinceDay),
+        ).mapCatching { obj ->
+            val rows = obj.getJSONArray("rows")
+            (0 until rows.length()).map { i ->
+                val row = rows.getJSONObject(i)
+                val labels = row.str("labels")?.let { j -> JSONArray(j).let { a -> (0 until a.length()).map { a.getString(it) } } }.orEmpty()
+                fun label(prefix: String) = labels.firstOrNull { it.startsWith(prefix) }?.removePrefix(prefix)
+                Habit(
+                    id = row.getString("id"),
+                    title = row.getString("title"),
+                    key = row.str("key"),
+                    days = row.str("days").orEmpty().split(',').mapNotNull { it.trim().toIntOrNull() }.toSet(),
+                    goal = label("habit_goal:")?.toIntOrNull(),
+                    unit = label("habit_unit:"),
+                    remindAt = label("habit_at:")?.toIntOrNull(),
+                    app = label("app:"),
+                    project = row.str("project_id")?.let {
+                        TaskProject(it, row.str("project").orEmpty(), row.str("project_color"), row.str("project_prefix"),
+                            paused = row.optBoolean("project_paused", false))
+                    },
+                    checks = row.str("checks").orEmpty().split(';').filter { it.contains('=') }.associate {
+                        val (d, a) = it.split('=', limit = 2)
+                        d to a.toIntOrNull()
+                    },
+                )
+            }
+        }
+
+    suspend fun insertHabit(ctx: Context, h: HabitDraft): Result<String> {
+        val id = UUID.randomUUID().toString()
+        return sql(
+            ctx,
+            """WITH next_ord AS (SELECT COALESCE(MAX("order"), -1) + 1 AS n FROM cards WHERE column_id = 'spur_col_todo')
+               INSERT INTO cards (id, title, description, "order", priority, labels, column_id,
+                                  source_message_id, source_from, source_type, due_date,
+                                  recurrence, recurrence_days, done, starred, archived, created_at, project_id)
+               SELECT $1, $2, NULL, n, 'MEDIUM', $3::text[], 'spur_col_todo', 'spur_' || $1, 'spur_app', 'spur', NULL,
+                      'DAILY', $4::int[], false, false, false, NOW(), $5
+               FROM next_ord""",
+            listOf(id, h.title, habitLabels(h.goal, h.unit, h.remindAt, h.app), intArray(h.days), h.projectId),
+        ).mapCatching { assignKey(ctx, id, h.projectId).getOrThrow(); id }
+    }
+
+    suspend fun updateHabit(ctx: Context, id: String, h: HabitDraft): Result<Unit> =
+        sql(
+            ctx,
+            """UPDATE cards SET title = $2,
+                      labels = ARRAY(SELECT l FROM unnest(labels) l WHERE l NOT LIKE 'habit\_%' AND l NOT LIKE 'app:%') || $3::text[],
+                      recurrence_days = $4::int[], project_id = $5
+               WHERE id = $1 AND source_type = 'spur'""",
+            listOf(id, h.title, habitLabels(h.goal, h.unit, h.remindAt, h.app), intArray(h.days), h.projectId),
+        ).map { }
+
+    /** Marca el día (o cambia la cantidad si ya estaba). */
+    suspend fun checkHabit(ctx: Context, cardId: String, day: String, amount: Int?): Result<Unit> =
+        sql(
+            ctx,
+            """INSERT INTO habit_checks (id, card_id, day, amount) VALUES ($1, $2, $3::date, $4::int)
+               ON CONFLICT (card_id, day) DO UPDATE SET amount = EXCLUDED.amount""",
+            listOf(UUID.randomUUID().toString(), cardId, day, amount),
+        ).map { }
+
+    suspend fun uncheckHabit(ctx: Context, cardId: String, day: String): Result<Unit> =
+        sql(ctx, "DELETE FROM habit_checks WHERE card_id = $1 AND day = $2::date", listOf(cardId, day)).map { }
+
+    /** Dejar el hábito: se archiva (sus checks quedan en la base). */
+    suspend fun archiveHabit(ctx: Context, id: String): Result<Unit> =
+        sql(ctx, "UPDATE cards SET archived = true WHERE id = $1 AND source_type = 'spur'", listOf(id)).map { }
 }

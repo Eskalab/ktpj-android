@@ -54,6 +54,7 @@ fun NewTaskScreen(
     projects: List<TaskProject> = emptyList(),
     onCreateProject: (suspend (String, String) -> TaskProject?)? = null,
     initialDue: String? = null,
+    onSwitchToHabit: (() -> Unit)? = null,
 ) {
     val c = KtpjTheme.colors
     val t = KtpjTheme.type
@@ -86,6 +87,12 @@ fun NewTaskScreen(
         ) {
             Text("TABLERO SPUR", style = t.overlineLarge, color = c.muted)
             Text(if (initial == null) "Nueva tarea" else "Editar tarea", style = t.onboardingTitle, color = c.fg)
+            if (initial == null && onSwitchToHabit != null) {
+                androidx.compose.foundation.layout.Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Chip("Tarea", true, {})
+                    Chip("↻ Hábito", false, onSwitchToHabit)
+                }
+            }
 
             Field("Qué hay que hacer") {
                 TextBox(title, { title = it.take(200) }, "Ej. Llamar al notario", "Título de la tarea", ImeAction.Next)

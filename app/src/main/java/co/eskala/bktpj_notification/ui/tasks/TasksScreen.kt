@@ -1,6 +1,7 @@
 package co.eskala.bktpj_notification.ui.tasks
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -61,6 +62,10 @@ fun TasksScreen(
     onToggleStarted: (SpurTask) -> Unit = {},
     epics: List<TaskProject> = emptyList(),
     onOpenEpic: (TaskProject) -> Unit = {},
+    habits: List<co.eskala.bktpj_notification.Habit> = emptyList(),
+    habitsError: String? = null,
+    onOpenHabit: (co.eskala.bktpj_notification.Habit) -> Unit = {},
+    onAddHabit: () -> Unit = {},
 ) {
     val c = KtpjTheme.colors
     val t = KtpjTheme.type
@@ -77,6 +82,9 @@ fun TasksScreen(
     var openUpcoming by rememberSaveable { mutableStateOf(false) }
     var openNoDate by rememberSaveable { mutableStateOf(false) }
     var openEpics by rememberSaveable { mutableStateOf(false) }
+    var openHabits by rememberSaveable { mutableStateOf(true) }
+    // Los que tocan hoy primero (pendientes antes que hechos); los que no tocan, al final y tenues.
+    val habitList = habits.sortedWith(compareBy({ !it.dueToday }, { it.doneToday }))
 
     LazyColumn(
         modifier.fillMaxSize().background(c.bg),
@@ -141,6 +149,33 @@ fun TasksScreen(
                     onToggleStarted = { onToggleStarted(task) },
                     onOpenEpic = onOpenEpic,
                 )
+            }
+        }
+
+        if (habits.isNotEmpty() || habitsError == null) {
+            val dueHabits = habits.filter { it.dueToday }
+            header("HÁBITOS" + if (dueHabits.isNotEmpty()) " · ${dueHabits.count { it.doneToday }}/${dueHabits.size} hoy" else "", 0, openHabits) { openHabits = !openHabits }
+            if (openHabits) {
+                items(habitList, key = { "habit:" + it.id }) { h -> co.eskala.bktpj_notification.ui.components.HabitRow(h, onOpen = { onOpenHabit(h) }) }
+                item(key = "habit:add") {
+                    Text(
+                        if (habits.isEmpty()) "+ Crear un hábito (ej. leer 10 páginas diarias)" else "+ Hábito",
+                        style = t.captionStrong,
+                        color = c.accent,
+                        modifier = Modifier.clip(KtpjShapes.pill).clickable(role = Role.Button, onClick = onAddHabit).padding(vertical = 8.dp),
+                    )
+                }
+            }
+        } else {
+            item(key = "habit:err") {
+                Column(
+                    Modifier.fillMaxWidth().padding(top = 10.dp).clip(KtpjShapes.card).background(c.accentSoft).padding(KtpjDimens.cardPadding),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text("HÁBITOS", style = t.overline, color = c.accentText)
+                    Text("No se pueden leer los hábitos: falta aplicar la migración habit_checks en la base.", style = t.secondary, color = c.fg)
+                    Text(habitsError.orEmpty(), style = t.caption, color = c.muted, maxLines = 2)
+                }
             }
         }
 

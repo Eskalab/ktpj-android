@@ -4,7 +4,7 @@ App Android personal (antes **Nu KTPJ**) que hace dos cosas:
 
 1. **Captura gastos sola** — lee las notificaciones de Nu Colombia y los SMS de Davivienda y los guarda como
    tarjetas y transacciones en KTPJ (Neon / Postgres).
-2. **Lleva tus tareas** — tareas con fecha, ★ prioridad, épicas (pausables) e IDs tipo Jira, con pomodoro integrado, que también se pueden crear
+2. **Lleva tus tareas** — tareas con fecha, ★ prioridad, épicas (pausables) e IDs tipo Jira, con pomodoro integrado, y **hábitos** con racha; las tareas también se pueden crear
    desde Claude Code con el skill `/spur`.
 
 Paquete: `co.eskala.bktpj_notification` · Kotlin + Jetpack Compose (Material3) · minSdk 26 · targetSdk 34.
@@ -46,6 +46,19 @@ Paquete: `co.eskala.bktpj_notification` · Kotlin + Jetpack Compose (Material3) 
 | **Inicio** | Solo las tareas **de hoy**, ★ primero. |
 | **Terminada el** | La base guarda `done_at` (trigger) sin importar desde dónde se marque: app, web o `/spur`. |
 
+### Hábitos
+
+| Función | Detalle |
+|---|---|
+| **Crear** | En **+ Nueva tarea**, selector **Tarea \| ↻ Hábito** (también **+ Hábito** en Tareas). Qué hábito, **qué días** (Todos · Entre semana · L M X J V S D), **meta del día** opcional con unidad (páginas, min, km, vasos, veces o libre), **aviso** opcional (7 a.m., 12 p.m., 6 p.m., 9 p.m. u otra hora), épica y app. |
+| **No se termina** | Es una sola tarjeta que se repite; cada día se marca. En la web se ve como *Diaria · LMXJV*. |
+| **Marcar** | Círculo en la fila. Con meta y unidad pregunta **¿Cuánto hiciste?** (meta ya puesta y atajos ½ · meta · 1½ · doble). Queda tachado con ✓ verde hasta mañana; tocar de nuevo lo desmarca. |
+| **Racha 🔥** | Días seguidos cumplidos. Los días que no tocan no la rompen, ni hoy mientras no termine. |
+| **Inicio y Tareas** | Inicio: **HÁBITOS · 1/2** con los que tocan hoy, pendientes primero. Tareas: sección **HÁBITOS** abierta; los que no tocan hoy salen tenues con *"hoy no toca"*. |
+| **Pantalla del hábito** | Racha actual, mejor racha y % del mes; **cuadrícula de 15 semanas** (verde hecho, borde tocaba y no se hizo, gris no tocaba) donde **tocar un día pasado lo marca**; últimos días con cantidad y total; **Editar** y **Dejar este hábito** (se archiva, lo registrado queda). |
+| **Aviso** | Los días que toca, desde la hora elegida, **una vez** y solo si no se ha marcado: *"↻ Leer · 10 páginas — Llevas 🔥 6 días"*, con **✓ Hecho** (registra la meta). |
+| **Épica en pausa** | Sus hábitos también salen de Inicio y Tareas y no avisan. |
+
 ### Resumen diario
 
 - **7:00 a.m. — Tu día** y **9:00 p.m. — Cierre del día**. La notificación solo avisa; al tocarla se abre una
@@ -67,6 +80,7 @@ Paquete: `co.eskala.bktpj_notification` · Kotlin + Jetpack Compose (Material3) 
 | `spur_tasks` | Nueva tarea (una vez, si llega desde fuera del celular) · ★ Pendiente cada hora (acción **Hecha**) |
 | `spur_daily` | Resumen de la mañana y de la noche |
 | `spur_pomodoro_run` | Pomodoro en curso: cuenta atrás fija, silenciosa (Pausar / Seguir) |
+| `spur_habits` | Hábito pendiente a su hora (acción **✓ Hecho**) |
 | `spur_pomodoro_end` | Pomodoro o descanso terminado, con sonido (Empezar el siguiente) |
 
 ### General
@@ -99,9 +113,10 @@ spur.py prioridad "texto" [--quitar]
 | `boards` / `columns` | Tablero **Spur** (`spur_board`, columna `spur_col_todo`, prefijo `SP`) y tablero **Nu Transacciones** (Inbox / Hoy). |
 | `cards` | Tareas (`source_type` `spur` / `claude`) y tarjetas de gastos. Campos usados: `key`, `due_date`, `priority` (HIGH = ★), `started_at` (en curso), `done`, `done_at`, `project_id` (épica), `labels` (`app:<paquete>`, `pomos:N` = pomodoros estimados). |
 | `projects` | **Épicas**: `title`, `color`, `prefix`, `key_seq` (contador de IDs), `paused_at` (en pausa). En la web se llaman Proyectos. |
+| `habit_checks` | Hábitos: un check por día cumplido (`card_id`, `day`, `amount`). El hábito es una tarjeta de Spur con `recurrence` DAILY, `recurrence_days` (0 = domingo; vacío = todos) y etiquetas `habit_goal:N`, `habit_unit:…`, `habit_at:H`. |
 | `transactions` | Una fila por movimiento capturado (monto, cuenta, banco, last4). |
 
-Migraciones (repo `ktpj`): `20261104000000_add_card_done_at`, `20261106000000_epic_keys_and_started_at`, `20261107000000_project_paused_at`.
+Migraciones (repo `ktpj`): `20261104000000_add_card_done_at`, `20261106000000_epic_keys_and_started_at`, `20261107000000_project_paused_at`, `20261108000000_habit_checks`.
 
 Solo en el celular: historial de capturas (`captures.json`), atajos (`shortcuts.json`), comercios fijos, estado
 de recordatorios / resúmenes, pomodoro en curso, sus ajustes y **pomodoros hechos por tarea** (SharedPreferences).
@@ -126,9 +141,10 @@ app/src/main/java/co/eskala/bktpj_notification/
 ├── NeonRepository.kt                             SQL por HTTP a Neon
 ├── SpurTasks.kt · SpurNotifications.kt           tareas, sync, recordatorios
 ├── DailySummary.kt                               resumen 7:00 / 21:00
+├── Habits.kt                                     hábitos: racha, checks, aviso
 ├── Pomodoro.kt                                   temporizador, alarma, notificación fija, ajustes
 ├── Balance.kt                                    fijos y balance del mes
-└── ui/  home · tasks (Tasks, NewTask, NextTask, Epic, Pomodoro) · gastos · history · balance · summary · settings · theme
+└── ui/  home · tasks (Tasks, NewTask, NextTask, Epic, Pomodoro, Habit, NewHabit) · gastos · history · balance · summary · settings · theme
 ```
 
 ## Limitaciones conocidas
@@ -138,4 +154,5 @@ app/src/main/java/co/eskala/bktpj_notification/
   pago, recordatorios), y crean transacción. Pendiente de corregir y limpiar.
 - Épicas creadas en la web no tienen prefijo: sus tareas usan `SP-n`.
 - Los pomodoros hechos se cuentan solo en el celular (no se suben a la base).
-- `/spur` todavía no pone pomodoros estimados.
+- `/spur` todavía no pone pomodoros estimados ni crea hábitos.
+- El resumen de la noche aún no menciona los hábitos; tampoco hay avance de libro (total de páginas).
