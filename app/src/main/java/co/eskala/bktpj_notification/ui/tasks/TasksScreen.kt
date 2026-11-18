@@ -2,6 +2,7 @@ package co.eskala.bktpj_notification.ui.tasks
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -67,6 +68,7 @@ fun TasksScreen(
     onOpenHabit: (co.eskala.bktpj_notification.Habit) -> Unit = {},
     onAddHabit: () -> Unit = {},
     onStartHabit: (co.eskala.bktpj_notification.Habit) -> Unit = {},
+    onOpenCalendar: () -> Unit = {},
 ) {
     val c = KtpjTheme.colors
     val t = KtpjTheme.type
@@ -95,6 +97,8 @@ fun TasksScreen(
         item {
             Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("Tareas", style = t.screenTitle, color = c.fg, modifier = Modifier.weight(1f).semantics { heading() })
+                OutlinePill("Calendario", onClick = onOpenCalendar)
+                androidx.compose.foundation.layout.Spacer(Modifier.width(8.dp))
                 OutlinePill(if (refreshing) "…" else "Actualizar", onClick = onRefresh, enabled = !refreshing)
             }
             PrimaryButton("+ Nueva tarea", onClick = onAdd, modifier = Modifier.padding(bottom = 4.dp))

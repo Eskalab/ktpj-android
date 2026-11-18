@@ -82,7 +82,7 @@ import kotlinx.coroutines.launch
 private enum class Tab(val label: String) { INICIO("Inicio"), TAREAS("Tareas"), GASTOS("Gastos"), AJUSTES("Ajustes") }
 
 /** Pantallas que se abren encima de las pestañas. */
-private enum class Overlay { MANUAL, SHORTCUT, NEW_TASK, EDIT_TASK, SUMMARY, EPIC, BALANCE, POMODORO, NEW_HABIT, EDIT_HABIT, HABIT, DESTINATIONS, NEON }
+private enum class Overlay { MANUAL, SHORTCUT, NEW_TASK, EDIT_TASK, SUMMARY, EPIC, BALANCE, POMODORO, NEW_HABIT, EDIT_HABIT, HABIT, CALENDAR, DESTINATIONS, NEON }
 
 /** App ya configurada: Inicio (dashboard) / Tareas / Gastos / Ajustes con navegación inferior. */
 @Composable
@@ -317,6 +317,11 @@ fun MainScreen(
     }
 
     when (overlay) {
+        Overlay.CALENDAR -> {
+            co.eskala.bktpj_notification.ui.tasks.CalendarScreen(onBack = { overlay = null })
+            return
+        }
+
         Overlay.HABIT -> {
             val h = habits.firstOrNull { it.id == habitId }
             if (h == null) { overlay = null; return }
@@ -740,6 +745,7 @@ fun MainScreen(
                     habitsError = habitsError,
                     onOpenHabit = { habitId = it.id; overlay = Overlay.HABIT },
                     onAddHabit = { overlay = Overlay.NEW_HABIT },
+                    onOpenCalendar = { overlay = Overlay.CALENDAR },
                     onStartHabit = ::startHabit,
                     onSetDue = { task, due ->
                         scope.launch {

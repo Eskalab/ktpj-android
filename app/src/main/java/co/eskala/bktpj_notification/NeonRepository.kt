@@ -368,6 +368,29 @@ object NeonRepository {
             listOf(sinceUtc),
         ).mapCatching { it.taskRows() }
 
+    /** Tarea terminada con la hora exacta (ms), para el calendario. */
+    data class DoneAt(val task: SpurTask, val at: Long)
+
+    /** KTP-5: tareas de Spur terminadas entre [fromMs] y [toMs] (done_at está en UTC). */
+    suspend fun fetchDoneBetween(ctx: Context, fromMs: Long, toMs: Long): Result<List<DoneAt>> =
+        sql(
+            ctx,
+            """SELECT $TASK_COLS, (EXTRACT(EPOCH FROM c.done_at) * 1000)::bigint AS done_ms
+               FROM cards c LEFT JOIN projects p ON p.id = c.project_id
+               WHERE c.source_type IN ('claude', 'spur') AND c.done AND NOT c.archived
+                 AND c.done_at >= to_timestamp($1::bigint / 1000.0) AT TIME ZONE 'UTC'
+                 AND c.done_at <  to_timestamp($2::bigint / 1000.0) AT TIME ZONE 'UTC'
+               ORDER BY c.done_at
+               LIMIT 500""",
+            listOf(fromMs.toString(), toMs.toString()),
+        ).mapCatching { obj ->
+            val rows = obj.getJSONArray("rows")
+            (0 until rows.length()).map { i ->
+                val row = rows.getJSONObject(i)
+                DoneAt(taskFromRow(row), row.get("done_ms").toString().toLong())
+            }
+        }
+
     /** Fecha para hacerla (YYYY-MM-DD) o null para quitarla. */
     suspend fun setTaskDue(ctx: Context, id: String, due: String?): Result<Unit> =
         sql(
