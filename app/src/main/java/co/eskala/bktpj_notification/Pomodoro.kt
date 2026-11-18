@@ -126,6 +126,7 @@ object Pomodoro {
             if (!cur.running) start(ctx)
             return
         }
+        PomoLog.close(ctx, PomoEnd.STOPPED)   // se cambió de tarea a mitad de un enfoque
         set(ctx, PomoState(id, title, key, PomoMode.FOCUS, null, PomoMode.FOCUS.fullMs, 0, estimate, habit))
         start(ctx)
     }
@@ -134,31 +135,36 @@ object Pomodoro {
         val s = load(ctx) ?: return
         if (s.running) return
         val ms = if (s.remainingMs <= 0) s.mode.fullMs else s.remainingMs
-        set(ctx, s.copy(endsAt = System.currentTimeMillis() + ms, remainingMs = ms))
+        val next = s.copy(endsAt = System.currentTimeMillis() + ms, remainingMs = ms)
+        PomoLog.run(ctx, next)
+        set(ctx, next)
     }
 
     fun pause(ctx: Context) {
         val s = load(ctx) ?: return
         if (!s.running) return
+        if (s.mode == PomoMode.FOCUS) PomoLog.pause(ctx)
         set(ctx, s.copy(endsAt = null, remainingMs = s.remaining()))
     }
 
     /** Cambiar de modo a mano (pestañas): queda detenido con el tiempo completo. */
     fun select(ctx: Context, mode: PomoMode) {
         val s = load(ctx) ?: return
+        if (s.mode == PomoMode.FOCUS) PomoLog.close(ctx, PomoEnd.STOPPED)
         set(ctx, s.copy(mode = mode, endsAt = null, remainingMs = mode.fullMs))
     }
 
     /** Vuelve a empezar el modo actual, detenido. */
     fun reset(ctx: Context) {
         val s = load(ctx) ?: return
+        if (s.mode == PomoMode.FOCUS) PomoLog.close(ctx, PomoEnd.STOPPED)
         set(ctx, s.copy(endsAt = null, remainingMs = s.mode.fullMs))
     }
 
     /** Saltar al siguiente: un enfoque saltado cuenta como hecho (igual que al terminar). */
     fun skip(ctx: Context) {
         val s = load(ctx) ?: return
-        if (s.mode == PomoMode.FOCUS) countDone(ctx, s.taskId)
+        if (s.mode == PomoMode.FOCUS) { countDone(ctx, s.taskId); PomoLog.close(ctx, PomoEnd.SKIPPED) }
         set(ctx, advance(s))
     }
 
@@ -187,7 +193,7 @@ object Pomodoro {
         val s = load(ctx) ?: return
         val end = s.endsAt ?: return
         if (end > System.currentTimeMillis() + 500) return
-        if (s.mode == PomoMode.FOCUS) countDone(ctx, s.taskId)
+        if (s.mode == PomoMode.FOCUS) { countDone(ctx, s.taskId); PomoLog.close(ctx, PomoEnd.COMPLETED, now = end) }
         val next = advance(s)
         set(ctx, next)
         notifyEnd(ctx, s, next)
@@ -197,6 +203,7 @@ object Pomodoro {
     fun stop(ctx: Context, taskId: String? = null) {
         val s = load(ctx) ?: return
         if (taskId != null && s.taskId != taskId) return
+        if (s.mode == PomoMode.FOCUS) PomoLog.close(ctx, PomoEnd.STOPPED)
         set(ctx, null)
         NotificationManagerCompat.from(ctx).cancel(NOTIF_END)
     }

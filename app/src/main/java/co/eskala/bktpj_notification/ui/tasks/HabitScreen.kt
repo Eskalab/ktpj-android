@@ -120,6 +120,8 @@ fun HabitScreen(habit: Habit, onBack: () -> Unit, onEdit: () -> Unit, onStart: (
                 onClick = onStart,
             )
 
+            co.eskala.bktpj_notification.ui.components.PomoSessionsList(habit.id, todayOnly = false, max = 10)
+
             // Cifras
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Stat("🔥 $streak", "racha actual", Modifier.weight(1f))

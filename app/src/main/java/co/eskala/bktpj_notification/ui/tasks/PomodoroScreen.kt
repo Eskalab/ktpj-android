@@ -212,6 +212,12 @@ fun PomodoroScreen(
             color = soft,
         )
 
+        Spacer(Modifier.height(16.dp))
+        // KTP-4: inicio y fin de cada enfoque de hoy en esta tarea
+        Box(Modifier.fillMaxWidth()) {
+            co.eskala.bktpj_notification.ui.components.PomoSessionsList(state.taskId, todayOnly = true, ink = white, soft = soft, max = 4)
+        }
+
         Spacer(Modifier.weight(1f))
         Box(
             Modifier

@@ -105,6 +105,7 @@ fun NewTaskScreen(
             }
             Field("Épica (opcional)") { EpicField(projects, projectId, { projectId = it }, onCreateProject, initial?.project) }
             Field("Pomodoros estimados") { PomosField(pomos, { pomos = it }) }
+            initial?.let { co.eskala.bktpj_notification.ui.components.PomoSessionsList(it.id, todayOnly = false) }
             Field("App (opcional)") {
                 AppField(app, { app = it })
             }

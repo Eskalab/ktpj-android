@@ -113,7 +113,7 @@ fun MainScreen(
         summaryRequest?.let { openSummary(it); DailySummary.openRequest.value = null }
     }
     // Pomodoro de la tarea en curso (▶ Empezar). Se abre también desde su notificación.
-    LaunchedEffect(Unit) { Pomodoro.load(ctx) }
+    LaunchedEffect(Unit) { Pomodoro.load(ctx); co.eskala.bktpj_notification.PomoLog.load(ctx) }
     val pomo by Pomodoro.state.collectAsState()
     val pomoRequest by Pomodoro.openRequest.collectAsState()
     LaunchedEffect(pomoRequest) {
