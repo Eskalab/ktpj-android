@@ -85,6 +85,7 @@ fun HomeScreen(
     onOpenSummary: (DailySummary.Kind) -> Unit = {},
     habits: List<co.eskala.bktpj_notification.Habit> = emptyList(),
     onOpenHabit: (co.eskala.bktpj_notification.Habit) -> Unit = {},
+    onStartHabit: (co.eskala.bktpj_notification.Habit) -> Unit = {},
 ) {
     val c = KtpjTheme.colors
     val t = KtpjTheme.type
@@ -143,7 +144,7 @@ fun HomeScreen(
         val todayHabits = habits.filter { it.dueToday }.sortedBy { it.doneToday }
         if (todayHabits.isNotEmpty()) {
             Section("HÁBITOS · ${todayHabits.count { it.doneToday }}/${todayHabits.size}", action = "Ver todos", onAction = onOpenTasks) {
-                todayHabits.forEach { h -> co.eskala.bktpj_notification.ui.components.HabitRow(h, onOpen = { onOpenHabit(h) }) }
+                todayHabits.forEach { h -> co.eskala.bktpj_notification.ui.components.HabitRow(h, onOpen = { onOpenHabit(h) }, onStart = { onStartHabit(h) }) }
             }
         }
 

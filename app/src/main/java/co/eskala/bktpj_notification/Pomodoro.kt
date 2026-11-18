@@ -45,6 +45,7 @@ data class PomoState(
     val remainingMs: Long,
     val round: Int,
     val estimate: Int? = null,   // pomodoros estimados de la tarea
+    val habit: Boolean = false,  // es de un hábito: al terminar se marca el día, no se completa
 ) {
     val running: Boolean get() = endsAt != null
     fun remaining(now: Long = System.currentTimeMillis()): Long =
@@ -103,6 +104,7 @@ object Pomodoro {
                     remainingMs = p.getLong("remaining", PomoMode.FOCUS.fullMs),
                     round = p.getInt("round", 0),
                     estimate = p.getInt("estimate", 0).takeIf { it > 0 },
+                    habit = p.getBoolean("habit", false),
                 )
             }
             loaded = true
@@ -111,15 +113,20 @@ object Pomodoro {
     }
 
     /** "▶ Empezar": abre el pomodoro de la tarea y arranca el enfoque. Si ya era de esa tarea, sigue donde iba. */
-    fun begin(ctx: Context, task: SpurTask) {
+    fun begin(ctx: Context, task: SpurTask) = begin(ctx, task.id, task.title, task.key, task.pomos, habit = false)
+
+    /** Pomodoro de un hábito (ej. "Leer · 10 páginas"). */
+    fun begin(ctx: Context, h: Habit) = begin(ctx, h.id, h.title + (h.goalLabel?.let { " · $it" } ?: ""), h.key, null, habit = true)
+
+    private fun begin(ctx: Context, id: String, title: String, key: String?, estimate: Int?, habit: Boolean) {
         load(ctx)
         val cur = _state.value
-        if (cur != null && cur.taskId == task.id) {
-            if (cur.estimate != task.pomos) set(ctx, cur.copy(estimate = task.pomos))
+        if (cur != null && cur.taskId == id) {
+            if (cur.estimate != estimate) set(ctx, cur.copy(estimate = estimate))
             if (!cur.running) start(ctx)
             return
         }
-        set(ctx, PomoState(task.id, task.title, task.key, PomoMode.FOCUS, null, PomoMode.FOCUS.fullMs, 0, task.pomos))
+        set(ctx, PomoState(id, title, key, PomoMode.FOCUS, null, PomoMode.FOCUS.fullMs, 0, estimate, habit))
         start(ctx)
     }
 
@@ -211,11 +218,11 @@ object Pomodoro {
     private fun set(ctx: Context, s: PomoState?) {
         _state.value = s
         val e = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-        listOf("taskId", "title", "key", "mode", "endsAt", "remaining", "round", "estimate").forEach { e.remove(it) }
+        listOf("taskId", "title", "key", "mode", "endsAt", "remaining", "round", "estimate", "habit").forEach { e.remove(it) }
         if (s != null) {
             e.putString("taskId", s.taskId).putString("title", s.taskTitle).putString("key", s.taskKey)
                 .putString("mode", s.mode.name).putLong("endsAt", s.endsAt ?: 0L)
-                .putLong("remaining", s.remainingMs).putInt("round", s.round).putInt("estimate", s.estimate ?: 0)
+                .putLong("remaining", s.remainingMs).putInt("round", s.round).putInt("estimate", s.estimate ?: 0).putBoolean("habit", s.habit)
         }
         e.apply()
         sync(ctx, s)

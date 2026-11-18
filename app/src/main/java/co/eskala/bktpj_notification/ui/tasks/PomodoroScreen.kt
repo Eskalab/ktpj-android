@@ -222,7 +222,7 @@ fun PomodoroScreen(
                 .padding(vertical = 14.dp),
             contentAlignment = Alignment.Center,
         ) {
-            Text("✓ Terminé la tarea", style = t.button, color = white)
+            Text(if (state.habit) "✓ Listo por hoy" else "✓ Terminé la tarea", style = t.button, color = white)
         }
     }
 }

@@ -142,6 +142,11 @@ fun MainScreen(
     val habitsError by co.eskala.bktpj_notification.Habits.error.collectAsState()
     val activeHabits = habits.filter { it.active }
     var habitId by rememberSaveable { mutableStateOf<String?>(null) }
+    fun startHabit(h: co.eskala.bktpj_notification.Habit) {
+        Pomodoro.begin(ctx, h)
+        overlay = Overlay.POMODORO
+    }
+    var habitDoneAsk by remember { mutableStateOf<co.eskala.bktpj_notification.Habit?>(null) }
     // Día a día (Inicio, Tareas, resumen): sin las tareas de épicas en pausa.
     val activeTasks = tasks.filter { it.active }
     val doneToday by SpurTasks.doneToday.collectAsState()
@@ -315,7 +320,7 @@ fun MainScreen(
         Overlay.HABIT -> {
             val h = habits.firstOrNull { it.id == habitId }
             if (h == null) { overlay = null; return }
-            co.eskala.bktpj_notification.ui.tasks.HabitScreen(h, onBack = { overlay = null }, onEdit = { overlay = Overlay.EDIT_HABIT })
+            co.eskala.bktpj_notification.ui.tasks.HabitScreen(h, onBack = { overlay = null }, onEdit = { overlay = Overlay.EDIT_HABIT }, onStart = { startHabit(h) })
             return
         }
 
@@ -360,11 +365,38 @@ fun MainScreen(
                 state = p,
                 onBack = { overlay = null },
                 onTaskDone = {
-                    val task = tasks.firstOrNull { it.id == p.taskId }
-                    overlay = null
-                    if (task != null) completeTask(task) else Pomodoro.stop(ctx)
+                    if (p.habit) {
+                        // Hábito: marca el día (pregunta cuánto si tiene meta con unidad) y cierra el pomodoro.
+                        val h = habits.firstOrNull { it.id == p.taskId }
+                        if (h != null && h.goal != null && !h.unit.isNullOrBlank()) habitDoneAsk = h
+                        else {
+                            Pomodoro.stop(ctx); overlay = null
+                            if (h != null) scope.launch {
+                                val r = co.eskala.bktpj_notification.Habits.check(ctx, h.id, h.goal)
+                                Toast.makeText(ctx, if (r.isSuccess) "✓ ${h.title}: hecho por hoy" else "No se pudo marcar: ${r.exceptionOrNull()?.message}", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    } else {
+                        val task = tasks.firstOrNull { it.id == p.taskId }
+                        overlay = null
+                        if (task != null) completeTask(task) else Pomodoro.stop(ctx)
+                    }
                 },
             )
+            habitDoneAsk?.let { h ->
+                co.eskala.bktpj_notification.ui.components.AmountDialog(
+                    habit = h,
+                    onSave = { amount ->
+                        habitDoneAsk = null
+                        Pomodoro.stop(ctx); overlay = null
+                        scope.launch {
+                            val r = co.eskala.bktpj_notification.Habits.check(ctx, h.id, amount)
+                            Toast.makeText(ctx, if (r.isSuccess) "✓ ${h.title}: $amount ${h.unit} hoy" else "No se pudo marcar: ${r.exceptionOrNull()?.message}", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    onDismiss = { habitDoneAsk = null },
+                )
+            }
             return
         }
 
@@ -688,6 +720,7 @@ fun MainScreen(
                     onOpenSummary = ::openSummary,
                     habits = activeHabits,
                     onOpenHabit = { habitId = it.id; overlay = Overlay.HABIT },
+                    onStartHabit = ::startHabit,
                 )
 
                 Tab.TAREAS -> TasksScreen(
@@ -707,6 +740,7 @@ fun MainScreen(
                     habitsError = habitsError,
                     onOpenHabit = { habitId = it.id; overlay = Overlay.HABIT },
                     onAddHabit = { overlay = Overlay.NEW_HABIT },
+                    onStartHabit = ::startHabit,
                     onSetDue = { task, due ->
                         scope.launch {
                             val r = SpurTasks.setDue(ctx, task.id, due)

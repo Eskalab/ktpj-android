@@ -66,6 +66,7 @@ fun TasksScreen(
     habitsError: String? = null,
     onOpenHabit: (co.eskala.bktpj_notification.Habit) -> Unit = {},
     onAddHabit: () -> Unit = {},
+    onStartHabit: (co.eskala.bktpj_notification.Habit) -> Unit = {},
 ) {
     val c = KtpjTheme.colors
     val t = KtpjTheme.type
@@ -156,7 +157,7 @@ fun TasksScreen(
             val dueHabits = habits.filter { it.dueToday }
             header("HÁBITOS" + if (dueHabits.isNotEmpty()) " · ${dueHabits.count { it.doneToday }}/${dueHabits.size} hoy" else "", 0, openHabits) { openHabits = !openHabits }
             if (openHabits) {
-                items(habitList, key = { "habit:" + it.id }) { h -> co.eskala.bktpj_notification.ui.components.HabitRow(h, onOpen = { onOpenHabit(h) }) }
+                items(habitList, key = { "habit:" + it.id }) { h -> co.eskala.bktpj_notification.ui.components.HabitRow(h, onOpen = { onOpenHabit(h) }, onStart = { onStartHabit(h) }) }
                 item(key = "habit:add") {
                     Text(
                         if (habits.isEmpty()) "+ Crear un hábito (ej. leer 10 páginas diarias)" else "+ Hábito",

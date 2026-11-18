@@ -56,6 +56,7 @@ Paquete: `co.eskala.bktpj_notification` · Kotlin + Jetpack Compose (Material3) 
 | **Racha 🔥** | Días seguidos cumplidos. Los días que no tocan no la rompen, ni hoy mientras no termine. |
 | **Inicio y Tareas** | Inicio: **HÁBITOS · 1/2** con los que tocan hoy, pendientes primero. Tareas: sección **HÁBITOS** abierta; los que no tocan hoy salen tenues con *"hoy no toca"*. |
 | **Pantalla del hábito** | Racha actual, mejor racha y % del mes; **cuadrícula de 15 semanas** (verde hecho, borde tocaba y no se hizo, gris no tocaba) donde **tocar un día pasado lo marca**; últimos días con cantidad y total; **Editar** y **Dejar este hábito** (se archiva, lo registrado queda). |
+| **Pomodoro** | **▶ Empezar** en la fila (si toca hoy y no está hecho) y botón grande **▶ Empezar pomodoro** en la pantalla del hábito. Al final, **✓ Listo por hoy** marca el día (pregunta cuánto si hay meta) y cierra el pomodoro. |
 | **Aviso** | Los días que toca, desde la hora elegida, **una vez** y solo si no se ha marcado: *"↻ Leer · 10 páginas — Llevas 🔥 6 días"*, con **✓ Hecho** (registra la meta). |
 | **Épica en pausa** | Sus hábitos también salen de Inicio y Tareas y no avisan. |
 

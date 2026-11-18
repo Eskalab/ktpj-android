@@ -22,6 +22,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -61,7 +62,7 @@ private const val WEEKS = 15
  * por si se olvidó registrarlo.
  */
 @Composable
-fun HabitScreen(habit: Habit, onBack: () -> Unit, onEdit: () -> Unit) {
+fun HabitScreen(habit: Habit, onBack: () -> Unit, onEdit: () -> Unit, onStart: () -> Unit = {}) {
     val c = KtpjTheme.colors
     val t = KtpjTheme.type
     val ctx = LocalContext.current
@@ -109,8 +110,15 @@ fun HabitScreen(habit: Habit, onBack: () -> Unit, onEdit: () -> Unit) {
                 habit.app?.let { AppLink(it) }
             }
 
-            // Hoy
+            // Hoy: marcar y, aparte, un botón grande para el pomodoro (siempre, aunque ya esté hecho:
+            // leer de más también vale).
             HabitRow(habit, onOpen = {})
+            val pomo by co.eskala.bktpj_notification.Pomodoro.state.collectAsState()
+            val running = pomo?.taskId == habit.id
+            co.eskala.bktpj_notification.ui.components.PrimaryButton(
+                if (running) "● Volver al pomodoro" else "▶ Empezar pomodoro",
+                onClick = onStart,
+            )
 
             // Cifras
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {

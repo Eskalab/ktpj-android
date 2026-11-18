@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -44,7 +45,7 @@ import kotlinx.coroutines.launch
  * Si tiene meta con unidad, al marcar pregunta cuánto hiciste (con la meta ya puesta).
  */
 @Composable
-fun HabitRow(habit: Habit, onOpen: () -> Unit) {
+fun HabitRow(habit: Habit, onOpen: () -> Unit, onStart: (() -> Unit)? = null) {
     val c = KtpjTheme.colors
     val t = KtpjTheme.type
     val ctx = LocalContext.current
@@ -113,7 +114,22 @@ fun HabitRow(habit: Habit, onOpen: () -> Unit) {
                 if (!due && !done) "hoy no toca" else null,
                 if (streak > 0) "🔥 $streak" else null,
             ).joinToString(" · ")
-            if (meta.isNotEmpty()) Text(meta, style = t.captionStrong, color = c.muted)
+            Row(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (meta.isNotEmpty()) Text(meta, style = t.captionStrong, color = c.muted)
+                // Pomodoro: solo si toca hoy y aún no está hecho
+                if (onStart != null && !done) {
+                    val running = co.eskala.bktpj_notification.Pomodoro.state.collectAsState().value?.taskId == habit.id
+                    Text(
+                        if (running) "● En curso" else "▶ Empezar",
+                        style = t.captionStrong,
+                        color = if (running) c.blue else c.muted,
+                        modifier = Modifier
+                            .clip(KtpjShapes.pill)
+                            .clickable(role = Role.Button, onClickLabel = "Empezar pomodoro", onClick = onStart)
+                            .padding(vertical = 4.dp),
+                    )
+                }
+            }
         }
         Text("›", style = t.amount, color = c.muted)
     }
