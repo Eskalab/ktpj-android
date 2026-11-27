@@ -90,7 +90,7 @@ fun HomeScreen(
     val c = KtpjTheme.colors
     val t = KtpjTheme.type
     val today = captures.filter { isToday(it.at) }
-    val errors = today.count { it.status == CaptureStatus.ERROR }
+    val errors = today.count { it.status == CaptureStatus.ERROR && !it.pendingUpload }   // sin red no es error
     // Solo lo gastado en variables: un arriendo pagado no infla el día y una transferencia recibida no lo compensa.
     val todayVariable = Balance.variableOf(today, fixed)
 

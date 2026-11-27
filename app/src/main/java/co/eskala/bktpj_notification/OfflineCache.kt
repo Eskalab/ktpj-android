@@ -107,11 +107,7 @@ object OfflineCache {
     private fun update(ctx: Context, f: (CacheSnapshot) -> CacheSnapshot) = synchronized(this) {
         val next = f(get(ctx))
         snapshot = next
-        runCatching {
-            val tmp = File(ctx.filesDir, "$FILE.tmp")
-            tmp.writeText(CacheCodec.encode(next))
-            tmp.renameTo(file(ctx))
-        }
+        OfflineFiles.writeAtomic(file(ctx), CacheCodec.encode(next))
     }
 
     private fun file(ctx: Context) = File(ctx.filesDir, FILE)

@@ -189,7 +189,7 @@ object SpurTasks {
 
     suspend fun markDone(ctx: Context, id: String): Result<Unit> {
         // Aparece tachada de inmediato; la cola la sube y la próxima lectura de la base la confirma.
-        local(ctx, OutboxOp.CompleteTask(id))
+        local(ctx, OutboxOp.CompleteTask(id, at = System.currentTimeMillis()))
         SpurNotifications.cancelTask(ctx, id)
         return Result.success(Unit)
     }

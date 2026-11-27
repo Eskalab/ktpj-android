@@ -7,7 +7,6 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
-import org.junit.Ignore
 import org.junit.Test
 import java.util.Calendar
 import java.util.TimeZone
@@ -110,7 +109,6 @@ class ModoOfflineKtp8Test {
     }
 
     // KTP-8-03 (parte automática: el gasto sin red suma al total del día)
-    @Ignore("BUG-2: un gasto guardado sin red queda como ERROR y no suma al total del día ni al balance")
     @Test fun gastoSinRedSumaAlTotalDelDia() {
         val c = Capture("c1", System.currentTimeMillis(), CaptureSource.MANUAL,
             NuTransaction("Tienda prueba", "8.500", "Tienda prueba", "cargo", ""),
@@ -130,7 +128,6 @@ class ModoOfflineKtp8Test {
     }
 
     // KTP-8-11 / KTP-8-26 (gana el último cambio): crear → posponer → editar fecha
-    @Ignore("BUG-3: la edición que se funde en la creación queda antes de un cambio de fecha/★ hecho en medio; gana el cambio viejo")
     @Test fun editarDespuesDePosponerSinRedGanaLaUltimaFecha() {
         val cola = encolar(
             crear("t1", due = "2026-11-26"),
@@ -150,7 +147,6 @@ class ModoOfflineKtp8Test {
     }
 
     // KTP-8-23 · Carrera: la creación se está subiendo y en ese momento se edita la tarea.
-    @Ignore("BUG-1: una edición hecha mientras se sube la creación se funde en esa entrada y se borra al confirmar")
     @Test fun edicionMientrasSeSubeLaCreacionNoSePierde() {
         var cola = encolar(crear("t1", "Borrador"))
         val enVuelo = OutboxPolicy.next(cola, 10_000L)!!                         // flush la toma y la envía
@@ -161,7 +157,6 @@ class ModoOfflineKtp8Test {
             pendientes.any { (it as? OutboxOp.UpdateTask)?.title == "Título final" || (it as? OutboxOp.CreateTask)?.title == "Título final" })
     }
 
-    @Ignore("BUG-1: si la creación en vuelo falla en la base, Outbox.replace la reescribe con la versión vieja y borra la edición")
     @Test fun edicionMientrasFallaLaCreacionNoSePierde() {
         var cola = encolar(crear("t1", "Borrador"))
         val enVuelo = OutboxPolicy.next(cola, 10_000L)!!

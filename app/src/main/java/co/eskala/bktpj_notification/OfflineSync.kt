@@ -96,11 +96,7 @@ object PendingCaptures {
 
     private fun save(ctx: Context, list: List<CaptureRetry>) {
         _list.value = list
-        runCatching {
-            val tmp = File(ctx.filesDir, "$FILE.tmp")
-            tmp.writeText(CaptureRetryPolicy.encodeAll(list))
-            tmp.renameTo(file(ctx))
-        }
+        OfflineFiles.writeAtomic(file(ctx), CaptureRetryPolicy.encodeAll(list))
     }
 
     private fun file(ctx: Context) = File(ctx.filesDir, FILE)
@@ -234,7 +230,7 @@ object OfflineSync {
         is OutboxOp.CreateTask -> NeonRepository.insertTask(ctx, op.title, op.description, op.due, op.high, op.app, op.projectId, op.pomos, id = op.id)
         is OutboxOp.UpdateTask -> NeonRepository.updateTask(ctx, op.id, op.title, op.description, op.due, op.high, op.app, op.projectId, op.pomos)
             .mapCatching { if (op.rekey) NeonRepository.assignKey(ctx, op.id, op.projectId).getOrThrow(); op.id }
-        is OutboxOp.CompleteTask -> NeonRepository.markTaskDone(ctx, op.id).map { op.id }
+        is OutboxOp.CompleteTask -> NeonRepository.markTaskDone(ctx, op.id, op.at).map { op.id }
         is OutboxOp.SetStarted -> NeonRepository.setTaskStarted(ctx, op.id, op.started).map { op.id }
         is OutboxOp.SetDue -> NeonRepository.setTaskDue(ctx, op.id, op.due).map { op.id }
         is OutboxOp.SetPriority -> NeonRepository.setTaskPriority(ctx, op.id, op.high).map { op.id }

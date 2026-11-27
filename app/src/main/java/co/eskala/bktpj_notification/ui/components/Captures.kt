@@ -62,7 +62,8 @@ fun amountColor(c: Capture): Color =
 fun CaptureCard(capture: Capture, onRetry: () -> Unit, retrying: Boolean) {
     val c = KtpjTheme.colors
     val t = KtpjTheme.type
-    val isError = capture.status == CaptureStatus.ERROR
+    // Pendiente de red (KTP-8): tarjeta normal con su monto y "sin red · se sube sola", no en rojo.
+    val isError = capture.status == CaptureStatus.ERROR && !capture.pendingUpload
     val shape = KtpjShapes.card
     Row(
         Modifier

@@ -31,7 +31,7 @@ object CardSaver {
         val error: String? = if (inboxId.isEmpty()) {
             "Configura las columnas de destino"
         } else {
-            val r1 = NeonRepository.insertCard(ctx, tx, inboxId, source)
+            val r1 = NeonRepository.insertCard(ctx, tx, inboxId, source, occurredAt = at)
             val r2 = if (alsoHoy && r1.isSuccess) {
                 NeonRepository.insertCard(ctx, tx, hoyId, source, withTransaction = false)
             } else r1

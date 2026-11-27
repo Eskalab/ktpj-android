@@ -35,7 +35,8 @@ sealed class OutboxOp {
         override val coalesceKey get() = "update:$id"
     }
 
-    data class CompleteTask(val id: String) : OutboxOp() {
+    /** [at] = cuándo se marcó Hecha en el celular (ms), para que done_at no quede con la hora de subida. */
+    data class CompleteTask(val id: String, val at: Long? = null) : OutboxOp() {
         override val entity get() = "task:$id"
         override val coalesceKey get() = "done:$id"
     }
@@ -107,15 +108,23 @@ object OutboxPolicy {
     fun readyAt(e: OutboxEntry): Long = if (e.attempts == 0) 0 else e.lastAttemptAt + backoffMs(e.attempts)
 
     /**
-     * Agrega [op] al final. Si ya había uno con la misma clave, el viejo se quita (gana el último).
-     * Una edición de una tarea que aún no se ha creado en la base se funde en la creación.
+     * Agrega [op] al final con un [seq] nuevo. Si ya había uno con la misma clave, el viejo se quita (gana el
+     * último). Nunca se modifica una entrada existente en su lugar: puede estar enviándose en este momento y,
+     * al confirmarla (remove por seq) o al anotar su fallo (replace), se perdería lo fundido en ella.
+     *
+     * Editar una tarea cuya creación sigue en la cola: la creación vieja y los cambios de fecha/★/edición
+     * que había detrás se funden, en orden, en una creación NUEVA al final (seq nuevo). El envío de la
+     * creación es un upsert, así que si la vieja ya estaba llegando a la base, la nueva la corrige.
      */
     fun enqueue(entries: List<OutboxEntry>, op: OutboxOp, seq: Long, now: Long): List<OutboxEntry> {
         if (op is OutboxOp.UpdateTask) {
-            val i = entries.indexOfFirst { (it.op as? OutboxOp.CreateTask)?.id == op.id }
-            if (i >= 0) {
-                val merged = OutboxOp.CreateTask(op.id, op.title, op.description, op.due, op.high, op.app, op.projectId, op.pomos)
-                return entries.toMutableList().also { it[i] = it[i].copy(op = merged) }
+            val c = entries.firstOrNull { (it.op as? OutboxOp.CreateTask)?.id == op.id }
+            if (c != null) {
+                val folded = entries.filter { it.seq > c.seq && it.op.taskId == op.id && isCreateField(it.op) }
+                var merged = c.op as OutboxOp.CreateTask
+                (folded.map { it.op } + op).forEach { merged = fold(merged, it) }
+                val gone = folded.map { it.seq }.toSet() + c.seq
+                return entries.filterNot { it.seq in gone } + OutboxEntry(seq, merged, now)
             }
         }
         var rekey = (op as? OutboxOp.UpdateTask)?.rekey ?: false
@@ -128,16 +137,30 @@ object OutboxPolicy {
         return kept + OutboxEntry(seq, finalOp, now)
     }
 
+    /** Cambios que caben en la creación (los campos que lleva el INSERT). En curso y Hecha van aparte. */
+    private fun isCreateField(op: OutboxOp) = op is OutboxOp.SetDue || op is OutboxOp.SetPriority || op is OutboxOp.UpdateTask
+
+    private fun fold(c: OutboxOp.CreateTask, op: OutboxOp): OutboxOp.CreateTask = when (op) {
+        is OutboxOp.SetDue -> c.copy(due = op.due)
+        is OutboxOp.SetPriority -> c.copy(high = op.high)
+        is OutboxOp.UpdateTask -> c.copy(title = op.title, description = op.description, due = op.due, high = op.high,
+            app = op.app, projectId = op.projectId, pomos = op.pomos)
+        else -> c
+    }
+
     /**
      * Siguiente cambio que se puede enviar, en orden. Un cambio espera si antes hay otro de la misma cosa
-     * todavía pendiente (esperando su reintento) o si la creación de su tarea quedó aparte: sin la tarea
-     * en la base no tiene sentido enviarlo. [skip] = cosas que ya fallaron en esta pasada.
+     * todavía pendiente (esperando su reintento), y nada de una tarea sale mientras su creación siga en la
+     * cola (aunque esté más atrás por haberse fundido con una edición): sin la tarea en la base no tiene
+     * sentido. [skip] = cosas que ya fallaron en esta pasada.
      */
     fun next(entries: List<OutboxEntry>, now: Long, skip: Set<String> = emptySet()): OutboxEntry? {
         val blocked = HashSet<String>(skip)
+        val createSeq = entries.filter { it.op is OutboxOp.CreateTask }.associate { it.op.entity to it.seq }
         for (e in entries.sortedBy { it.seq }) {
             val entity = e.op.entity
             if (entity in blocked) continue
+            if (createSeq[entity].let { it != null && it != e.seq }) continue   // espera a su creación
             if (e.parked) {
                 if (e.op is OutboxOp.CreateTask) blocked += entity
                 continue
@@ -188,7 +211,10 @@ object OutboxPolicy {
         var open = tasks
         var done = doneToday
         fun edit(id: String, f: (SpurTask) -> SpurTask) { open = open.map { if (it.id == id) f(it) else it } }
-        for (op in ops) when (op) {
+        // Las creaciones primero, como al enviar: una creación fundida con una edición queda al final de la
+        // cola, pero lo que dependía de ella (en curso, Hecha) se envía después.
+        val ordered = ops.filterIsInstance<OutboxOp.CreateTask>() + ops.filterNot { it is OutboxOp.CreateTask }
+        for (op in ordered) when (op) {
             is OutboxOp.CreateTask -> if (open.none { it.id == op.id } && done.none { it.id == op.id }) {
                 open = listOf(SpurTask(op.id, op.title, op.description, op.due, op.high, op.app,
                     op.projectId?.let(project), key = null, pomos = op.pomos)) + open
@@ -227,7 +253,7 @@ object OutboxPolicy {
     fun encodeOp(op: OutboxOp): String = when (op) {
         is OutboxOp.CreateTask -> OfflineCodec.record("create", op.id, op.title, op.description, op.due, b(op.high), op.app, op.projectId, op.pomos?.toString())
         is OutboxOp.UpdateTask -> OfflineCodec.record("update", op.id, op.title, op.description, op.due, b(op.high), op.app, op.projectId, op.pomos?.toString(), b(op.rekey))
-        is OutboxOp.CompleteTask -> OfflineCodec.record("done", op.id)
+        is OutboxOp.CompleteTask -> OfflineCodec.record("done", op.id, op.at?.toString())
         is OutboxOp.SetStarted -> OfflineCodec.record("started", op.id, b(op.started))
         is OutboxOp.SetDue -> OfflineCodec.record("due", op.id, op.due)
         is OutboxOp.SetPriority -> OfflineCodec.record("prio", op.id, b(op.high))
@@ -244,7 +270,7 @@ object OutboxPolicy {
         when (f[0]) {
             "create" -> OutboxOp.CreateTask(r(1), r(2), g(3), g(4), bool(5), g(6), g(7), g(8)?.toIntOrNull())
             "update" -> OutboxOp.UpdateTask(r(1), r(2), g(3), g(4), bool(5), g(6), g(7), g(8)?.toIntOrNull(), bool(9))
-            "done" -> OutboxOp.CompleteTask(r(1))
+            "done" -> OutboxOp.CompleteTask(r(1), g(2)?.toLongOrNull())
             "started" -> OutboxOp.SetStarted(r(1), bool(2))
             "due" -> OutboxOp.SetDue(r(1), g(2))
             "prio" -> OutboxOp.SetPriority(r(1), bool(2))
@@ -274,13 +300,21 @@ object OutboxPolicy {
 
     fun encodeAll(entries: List<OutboxEntry>): String = entries.joinToString("\n") { encode(it) }
 
-    fun decodeAll(text: String): List<OutboxEntry> =
-        text.lineSequence().filter { it.isNotBlank() }.mapNotNull { decode(it) }.sortedBy { it.seq }.toList()
+    fun decodeAll(text: String): List<OutboxEntry> = decodeWithRejects(text).first
+
+    /** Como [decodeAll], pero devuelve también las líneas que no se entendieron (se guardan aparte, no se borran). */
+    fun decodeWithRejects(text: String): Pair<List<OutboxEntry>, List<String>> {
+        val ok = ArrayList<OutboxEntry>()
+        val bad = ArrayList<String>()
+        text.lineSequence().filter { it.isNotBlank() }.forEach { line -> decode(line)?.let { ok += it } ?: bad.add(line) }
+        return ok.sortedBy { it.seq } to bad
+    }
 }
 
 /** La cola en disco (filesDir/outbox.txt). Sobrevive a cerrar la app y a reiniciar el teléfono. */
 object Outbox {
     private const val FILE = "outbox.txt"
+    private const val REJECTED = "outbox_rejected.txt"
 
     private val _entries = MutableStateFlow<List<OutboxEntry>>(emptyList())
     val entries: StateFlow<List<OutboxEntry>> = _entries.asStateFlow()
@@ -289,8 +323,11 @@ object Outbox {
 
     fun load(ctx: Context): List<OutboxEntry> = synchronized(this) {
         if (!loaded) {
-            _entries.value = runCatching { file(ctx).takeIf { it.exists() }?.readText()?.let(OutboxPolicy::decodeAll) }
-                .getOrNull().orEmpty()
+            val text = runCatching { file(ctx).takeIf { it.exists() }?.readText() }.getOrNull()
+            val (ok, bad) = text?.let(OutboxPolicy::decodeWithRejects) ?: (emptyList<OutboxEntry>() to emptyList())
+            // Lo que no se entiende (archivo cortado, versión futura) se guarda aparte en vez de perderse.
+            if (bad.isNotEmpty()) runCatching { File(ctx.filesDir, REJECTED).appendText(bad.joinToString("\n", postfix = "\n")) }
+            _entries.value = ok
             loaded = true
         }
         _entries.value
@@ -318,10 +355,21 @@ object Outbox {
 
     private fun file(ctx: Context) = File(ctx.filesDir, FILE)
 
-    // Escritura atómica: temporal + rename, como el historial de capturas.
+    // Escritura atómica: temporal + rename. Un error de disco no tumba la app: la cola sigue en memoria
+    // y se vuelve a intentar escribir con el siguiente cambio.
     private fun write(f: File, list: List<OutboxEntry>) {
-        val tmp = File(f.parentFile, "$FILE.tmp")
-        tmp.writeText(OutboxPolicy.encodeAll(list))
-        tmp.renameTo(f)
+        OfflineFiles.writeAtomic(f, OutboxPolicy.encodeAll(list))
+    }
+}
+
+/** Escritura atómica a prueba de errores de disco (cola, caché, capturas pendientes). */
+object OfflineFiles {
+    fun writeAtomic(f: File, text: String): Boolean = try {
+        val tmp = File(f.parentFile, f.name + ".tmp")
+        tmp.writeText(text)
+        tmp.renameTo(f) || (f.delete() && tmp.renameTo(f)) || run { f.writeText(text); tmp.delete(); true }
+    } catch (e: Exception) {
+        android.util.Log.w("Spur", "No se pudo guardar ${f.name}: ${e.message}")
+        false
     }
 }

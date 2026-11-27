@@ -36,14 +36,34 @@ class OutboxPolicyTest {
         assertEquals(1, queue(OutboxOp.CompleteTask("t1"), OutboxOp.CompleteTask("t1")).size)
     }
 
-    @Test fun updateOfUnsentTaskMergesIntoCreate() {
+    @Test fun updateOfUnsentTaskFoldsIntoANewCreateEntry() {
         val q = queue(create, OutboxOp.UpdateTask("t1", "Llamar al técnico", "hoy", null, true, null, "p1", 3, rekey = true))
-        assertEquals(1, q.size)
-        val c = q[0].op as OutboxOp.CreateTask
+        val c = q.single().op as OutboxOp.CreateTask
         assertEquals("Llamar al técnico", c.title)
         assertEquals("p1", c.projectId)
         assertTrue(c.high)
-        assertEquals(1L, q[0].seq)   // conserva su lugar (primero)
+        assertEquals(2L, q.single().seq)   // entrada nueva: la vieja (quizá en vuelo) no se toca
+    }
+
+    @Test fun foldKeepsFinalStateAndDependentsWaitForCreate() {
+        val q = queue(
+            create,                                        // due 26
+            OutboxOp.SetDue("t1", "2026-11-27"),
+            OutboxOp.SetStarted("t1", true),
+            OutboxOp.UpdateTask("t1", "X", null, "2026-11-30", false, null, null, null, rekey = false),
+            OutboxOp.SetPriority("t1", true),               // después de la edición: va aparte
+        )
+        assertEquals(listOf(3L, 4L, 5L), q.map { it.seq })
+        assertEquals("2026-11-30", (q[1].op as OutboxOp.CreateTask).due)
+        // Sale primero la creación aunque tenga seq mayor que "en curso"
+        assertEquals(4L, OutboxPolicy.next(q, 0)?.seq)
+        val sent = generateSequence(q) { cur -> OutboxPolicy.next(cur, 0)?.let { e -> cur.filterNot { it.seq == e.seq } } }
+            .zipWithNext { a, b -> (a - b.toSet()).single().op }.toList()
+        assertTrue(sent.first() is OutboxOp.CreateTask)
+        val t = OutboxPolicy.applyToTasks(emptyList(), emptyList(), sent) { null }.first.single()
+        assertEquals("2026-11-30", t.due); assertTrue(t.started); assertTrue(t.priority)
+        // La vista local con la cola tal cual da lo mismo
+        assertEquals(t, OutboxPolicy.applyToTasks(emptyList(), emptyList(), q.map { it.op }) { null }.first.single())
     }
 
     @Test fun coalescedUpdateKeepsRekey() {
@@ -138,6 +158,7 @@ class OutboxPolicyTest {
             OutboxOp.CreateTask("t2", "Sin nada", null, null, false, null, null, null),
             OutboxOp.UpdateTask("t1", "T", "", null, false, null, null, null, rekey = true),
             OutboxOp.CompleteTask("t1"),
+            OutboxOp.CompleteTask("t2", at = 1_764_200_000_000L),
             OutboxOp.SetStarted("t1", false),
             OutboxOp.SetDue("t1", null),
             OutboxOp.SetPriority("t1", true),
@@ -153,6 +174,17 @@ class OutboxPolicyTest {
         val good = OutboxEntry(1, OutboxOp.CompleteTask("t1"), 5)
         val text = OutboxPolicy.encode(good) + "\nbasura\n" + OfflineCodec.record("2", OfflineCodec.record("futuro", "x"), "0", "0", "0", null, "0")
         assertEquals(listOf(good), OutboxPolicy.decodeAll(text))
+    }
+
+    @Test fun unreadableLinesAreReturnedAsRejects() {
+        val good = OutboxEntry(1, OutboxOp.CompleteTask("t1"), 5)
+        val (ok, bad) = OutboxPolicy.decodeWithRejects(OutboxPolicy.encode(good) + "\nbasura\n\n")
+        assertEquals(listOf(good), ok)
+        assertEquals(listOf("basura"), bad)
+    }
+
+    @Test fun oldCompleteLineWithoutTimeStillDecodes() {
+        assertEquals(OutboxOp.CompleteTask("t1"), OutboxPolicy.decodeOp(OfflineCodec.record("done", "t1")))
     }
 
     // ── Vista local ──
@@ -210,5 +242,18 @@ class OutboxPolicyTest {
             listOf(OutboxOp.CheckHabit("h1", "2026-11-26", 12), OutboxOp.UncheckHabit("h1", "2026-11-25")),
         ).single()
         assertEquals(mapOf("2026-11-26" to 12), r.checks)
+    }
+}
+
+class PendingUploadCaptureTest {
+    private fun cap(status: CaptureStatus, error: String?) =
+        Capture("c", 0, CaptureSource.MANUAL, NuTransaction("Manual: \$8.500", "8.500", "Tienda", "cargo", ""), status, error)
+
+    @Test fun onlyOfflineErrorsArePendingUpload() {
+        assertTrue(cap(CaptureStatus.ERROR, OfflineSync.OFFLINE_MESSAGE).pendingUpload)
+        assertFalse(cap(CaptureStatus.ERROR, "Configura las columnas de destino").pendingUpload)
+        assertFalse(cap(CaptureStatus.OK, null).pendingUpload)
+        // Un error real de la base sigue sin contar en el balance
+        assertEquals(0.0, Balance.variableOf(listOf(cap(CaptureStatus.ERROR, "boom")), emptySet()), 0.0)
     }
 }

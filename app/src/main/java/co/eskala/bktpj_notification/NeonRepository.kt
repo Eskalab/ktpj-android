@@ -130,6 +130,7 @@ object NeonRepository {
         columnId: String,
         source: CaptureSource = CaptureSource.NU,
         withTransaction: Boolean = true,
+        occurredAt: Long? = null,   // KTP-8: hora real de la captura (ms); sin red puede subir mucho después
     ): Result<String> {
         val cardId = UUID.randomUUID().toString()
         val txId   = UUID.randomUUID().toString()
@@ -161,7 +162,7 @@ object NeonRepository {
                 merchant, last4, occurred_at, received_at, status, raw_snippet, created_at
             ) VALUES (
                 $1, $2, $6, $7, $3, 'COP',
-                $4, $8, NOW(), NOW(), 'UNREVIEWED', $5, NOW()
+                $4, $8, COALESCE(to_timestamp($9::bigint / 1000.0) AT TIME ZONE 'UTC', NOW()), NOW(), 'UNREVIEWED', $5, NOW()
             )
             ON CONFLICT (message_id) DO NOTHING
         """.trimIndent()
@@ -185,7 +186,7 @@ object NeonRepository {
         val card = sql(ctx, cardQuery, listOf(columnId, cardId, tx.title, tx.rawText, srcId, sourceFrom, sourceType))
         if (card.isFailure) return Result.failure(card.exceptionOrNull()!!)
         if (withTransaction && tx.recordTransaction) {
-            sql(ctx, txQuery, listOf(txId, srcId, amount, tx.merchant ?: account, tx.rawText, account, bank, tx.last4))
+            sql(ctx, txQuery, listOf(txId, srcId, amount, tx.merchant ?: account, tx.rawText, account, bank, tx.last4, occurredAt?.toString()))
         }
 
         return Result.success(cardId)
@@ -290,7 +291,11 @@ object NeonRepository {
                       array_remove(ARRAY['app:' || $7::text, 'pomos:' || $9::text], NULL), 'spur_col_todo', $5, 'spur_app', 'spur', $6::timestamp,
                       'NONE', '{}', false, false, false, NOW(), $8
                FROM next_ord
-               ON CONFLICT DO NOTHING""",
+               -- KTP-8: reenvío de la cola (mismo id). Gana la última versión de la creación; done y el resto no se tocan.
+               ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, description = EXCLUDED.description,
+                      due_date = EXCLUDED.due_date, priority = EXCLUDED.priority, project_id = EXCLUDED.project_id,
+                      labels = ARRAY(SELECT l FROM unnest(cards.labels) l WHERE l NOT LIKE 'app:%' AND l NOT LIKE 'pomos:%')
+                               || EXCLUDED.labels""",
             listOf(id, title, description, if (high) "HIGH" else "MEDIUM", "spur_$id", due, app, projectId, pomos?.toString()),
         ).mapCatching { assignKey(ctx, id, projectId, onlyIfMissing = true).getOrThrow(); id }
     }
@@ -302,9 +307,12 @@ object NeonRepository {
     suspend fun assignKey(ctx: Context, cardId: String, projectId: String?, onlyIfMissing: Boolean = false): Result<String?> =
         sql(
             ctx,
-            // onlyIfMissing (KTP-8): si la tarjeta ya tiene ID (reintento de una creación) no se gasta otro número.
+            // onlyIfMissing (KTP-8): si la tarjeta ya tiene ID (reintento de una creación) no se gasta otro número
+            // y la épica no cambió (su ID ya lleva el prefijo de la épica, o la épica no tiene prefijo).
             """WITH skip AS (
-                 SELECT 1 FROM cards WHERE id = $1 AND key IS NOT NULL AND $3::boolean
+                 SELECT 1 FROM cards c LEFT JOIN projects p ON p.id = $2
+                 WHERE c.id = $1 AND c.key IS NOT NULL AND $3::boolean
+                   AND (p.prefix IS NULL OR c.key LIKE p.prefix || '-%')
                ), pr AS (
                  UPDATE projects SET key_seq = key_seq + 1
                  WHERE id = $2 AND prefix IS NOT NULL AND NOT EXISTS (SELECT 1 FROM skip)
@@ -490,8 +498,19 @@ object NeonRepository {
         }
     }
 
-    suspend fun markTaskDone(ctx: Context, id: String): Result<Unit> =
-        sql(ctx, "UPDATE cards SET done = true WHERE id = $1 AND source_type IN ('claude', 'spur')", listOf(id)).map { }
+    /**
+     * [at] (ms) = cuándo se marcó en el celular (KTP-8: puede subir horas después). El trigger de done_at
+     * respeta un valor explícito (COALESCE(NEW.done_at, NOW())); si ya estaba hecha no se toca.
+     */
+    suspend fun markTaskDone(ctx: Context, id: String, at: Long? = null): Result<Unit> =
+        sql(
+            ctx,
+            """UPDATE cards SET done = true,
+                      done_at = CASE WHEN done THEN done_at
+                                     ELSE COALESCE(to_timestamp($2::bigint / 1000.0) AT TIME ZONE 'UTC', done_at) END
+               WHERE id = $1 AND source_type IN ('claude', 'spur')""",
+            listOf(id, at?.toString()),
+        ).map { }
 
     // ── Hábitos ── tarjeta de Spur con recurrence DAILY (días en recurrence_days, 0 = domingo) que nunca
     // se marca hecha; cada día cumplido es una fila en habit_checks. Meta y aviso en etiquetas.
