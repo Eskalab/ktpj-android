@@ -150,6 +150,14 @@ app/src/main/java/co/eskala/bktpj_notification/
 └── ui/  home · tasks (Tasks, NewTask, NextTask, Epic, Pomodoro, Habit, NewHabit) · gastos · history · balance · summary · settings · theme
 ```
 
+## QA y pruebas
+
+- `qa/regresion.sh` corre las pruebas automáticas (42, JVM, ~1 min); `--apk` además compila.
+- `qa/smoke.md` (5 min en el teléfono tras cada APK) y `qa/regresion-manual.md` (por área, según lo que cambió).
+- `qa/casos/` guarda los casos de prueba de cada requerimiento, escritos desde el texto de la tarea sin mirar el código.
+- Agente de Claude Code **`qa-spur`** (`.claude/agents/qa-spur.md`): modos `casos`, `automatizar`, `regresion`, `revisar`.
+- Guía completa para humanos: [`qa/README.md`](qa/README.md).
+
 ## Limitaciones conocidas
 
 - El **Balance** usa el historial del celular (las transacciones en la base no traen tipo ni comercio de Nu).
