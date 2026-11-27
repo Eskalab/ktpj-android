@@ -29,14 +29,20 @@ object CardSaver {
         val alsoHoy = hoyId.isNotEmpty() && hoyId != inboxId
         val destinations = if (alsoHoy) "Inbox + Hoy" else "Inbox"
 
+        // KTP-8: id estable por captura para que un reintento (automático al volver la red) no duplique la
+        // tarjeta ni la transacción (ON CONFLICT en source_message_id / message_id).
+        val tx = if (tx.messageId == null) tx.copy(messageId = "nu_$captureId") else tx
+        var offline = false
         val error: String? = if (inboxId.isEmpty()) {
             "Configura las columnas de destino"
         } else {
-            val r1 = NeonRepository.insertCard(ctx, tx, inboxId, source, location = loc)
+            val r1 = NeonRepository.insertCard(ctx, tx, inboxId, source, location = loc, occurredAt = at)
             val r2 = if (alsoHoy && r1.isSuccess) {
                 NeonRepository.insertCard(ctx, tx, hoyId, source, withTransaction = false)
             } else r1
-            r1.exceptionOrNull()?.message ?: r2.exceptionOrNull()?.let { "Hoy: ${it.message}" }
+            offline = OfflineSync.isNetworkError(r1.exceptionOrNull() ?: r2.exceptionOrNull())
+            if (offline) OfflineSync.OFFLINE_MESSAGE
+            else r1.exceptionOrNull()?.message ?: r2.exceptionOrNull()?.let { "Hoy: ${it.message}" }
                 ?: if (r1.isFailure || r2.isFailure) "Error desconocido" else null
         }
 
@@ -52,9 +58,18 @@ object CardSaver {
         )
         CaptureLog.put(ctx, capture)
 
+        // Sin red: queda en la cola de capturas y se sube sola; el error solo se avisa si ya no se reintentará.
+        val outcome = when {
+            error == null -> CaptureRetryPolicy.Outcome.OK
+            offline -> CaptureRetryPolicy.Outcome.NETWORK
+            else -> CaptureRetryPolicy.Outcome.SERVER
+        }
+        val notifyError = PendingCaptures.onResult(ctx, captureId, outcome)
+        if (offline) OfflineSync.scheduleWork(ctx)
+
         if (notify) {
             if (error == null) SpurNotifications.showSaved(ctx, capture)
-            else SpurNotifications.showError(ctx, capture)
+            else if (notifyError) SpurNotifications.showError(ctx, capture)
         }
         return capture
     }

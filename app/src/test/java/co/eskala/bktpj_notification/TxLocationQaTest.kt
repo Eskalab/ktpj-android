@@ -124,8 +124,10 @@ class TxLocationQaTest {
     }
 
     /**
-     * Revisión (INSERT en transactions): cada columna tiene su valor y los $n del VALUES van de $1 a $11,
-     * que es lo que se envía (8 de siempre + 3 de ubicación). Lee el texto del SQL desde el código.
+     * Revisión (INSERT en transactions): cada columna tiene su valor y los $n del VALUES van de $1 a $12,
+     * que es lo que se envía (8 de siempre + 3 de ubicación de KTP-7 + la hora real de captura de KTP-8).
+     * Lee el texto del SQL desde el código. Al integrar KTP-7 con KTP-8 se pasó de $11 a $12 y se separan
+     * los valores por comas de primer nivel (COALESCE(…, NOW()) lleva una coma dentro).
      */
     @Test fun insertDeTransaccionTieneTantosParametrosComoValores() {
         val src = listOf(
@@ -135,14 +137,28 @@ class TxLocationQaTest {
         val q = Regex("""INSERT INTO transactions \((.*?)\) VALUES \((.*?)\)\s*ON CONFLICT""", RegexOption.DOT_MATCHES_ALL)
             .find(src)!!
         val cols = q.groupValues[1].split(",").map { it.trim() }.filter { it.isNotEmpty() }
-        val vals = q.groupValues[2].split(",").map { it.trim() }.filter { it.isNotEmpty() }
+        val vals = splitTopLevel(q.groupValues[2]).map { it.trim() }.filter { it.isNotEmpty() }
         assertEquals("columnas vs valores", cols.size, vals.size)
         val placeholders = Regex("""\$(\d+)""").findAll(q.groupValues[2]).map { it.groupValues[1].toInt() }.toSet()
-        assertEquals((1..11).toSet(), placeholders)
+        assertEquals((1..12).toSet(), placeholders)
         assertEquals("\$9::double precision", vals[cols.indexOf("location_lat")])
         assertEquals("\$10::double precision", vals[cols.indexOf("location_lng")])
         assertEquals("\$11::text", vals[cols.indexOf("location_address")])
         // Y el orden de sqlParams es lat, lng, dirección.
         assertEquals(listOf<Any?>(1.0, 2.0, "x"), TxLocation(1.0, 2.0, address = "x").sqlParams())
+    }
+
+    private fun splitTopLevel(s: String): List<String> {
+        val out = mutableListOf<String>(); var depth = 0; val cur = StringBuilder()
+        for (ch in s) {
+            when {
+                ch == '(' -> { depth++; cur.append(ch) }
+                ch == ')' -> { depth--; cur.append(ch) }
+                ch == ',' && depth == 0 -> { out += cur.toString(); cur.clear() }
+                else -> cur.append(ch)
+            }
+        }
+        out += cur.toString()
+        return out
     }
 }

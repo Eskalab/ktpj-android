@@ -35,6 +35,9 @@ data class Capture(
             }
 
     val signedAmount: String? get() = Money.signed(tx.amount, tx.type)
+
+    /** KTP-8: falló solo por falta de red y se sube sola. Cuenta en los totales y no es un error. */
+    val pendingUpload: Boolean get() = status == CaptureStatus.ERROR && error == OfflineSync.OFFLINE_MESSAGE
 }
 
 /**

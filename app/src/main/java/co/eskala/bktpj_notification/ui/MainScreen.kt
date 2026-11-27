@@ -209,7 +209,9 @@ fun MainScreen(
     }
     fun loadProjects() {
         scope.launch {
-            NeonRepository.fetchProjects(ctx).getOrNull()?.let { projects = it }
+            // KTP-8: sin red, las épicas guardadas la última vez.
+            (NeonRepository.fetchProjects(ctx).getOrNull()?.also { co.eskala.bktpj_notification.OfflineCache.saveProjects(ctx, it) }
+                ?: co.eskala.bktpj_notification.OfflineCache.get(ctx).projects)?.let { projects = it }
             NeonRepository.fetchUsedPrefixes(ctx).getOrNull()?.let { UsedPrefixes.boards = it }
         }
     }
@@ -684,6 +686,7 @@ fun MainScreen(
     }
 
     Column(Modifier.fillMaxSize().background(c.bg).safeDrawingPadding()) {
+        co.eskala.bktpj_notification.ui.components.OfflineBar()   // KTP-8: sin conexión / cambios por subir
         Box(Modifier.weight(1f)) {
             when (tab) {
                 Tab.INICIO -> HomeScreen(

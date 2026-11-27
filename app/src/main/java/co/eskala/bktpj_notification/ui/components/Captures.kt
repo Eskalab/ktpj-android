@@ -46,7 +46,11 @@ fun Capture.kindLabel(): String = when {
     else -> tx.type
 }
 
-private fun shortError(e: String) = if (e.contains("timeout", ignoreCase = true)) "timeout" else "error"
+private fun shortError(e: String) = when {
+    e.startsWith("Sin conexión") -> "sin red · se sube sola"   // KTP-8: en cola, se reintenta al volver la red
+    e.contains("timeout", ignoreCase = true) -> "timeout"
+    else -> "error"
+}
 
 /** Color del monto: abonos en green, el resto en fg. */
 @Composable
@@ -61,7 +65,8 @@ fun amountColor(c: Capture): Color =
 fun CaptureCard(capture: Capture, onRetry: () -> Unit, retrying: Boolean) {
     val c = KtpjTheme.colors
     val t = KtpjTheme.type
-    val isError = capture.status == CaptureStatus.ERROR
+    // Pendiente de red (KTP-8): tarjeta normal con su monto y "sin red · se sube sola", no en rojo.
+    val isError = capture.status == CaptureStatus.ERROR && !capture.pendingUpload
     val shape = KtpjShapes.card
     Row(
         Modifier
