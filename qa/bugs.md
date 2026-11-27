@@ -11,6 +11,7 @@ cola sin aviso. `OutboxPolicy.enqueue` funde la edición **dentro** de la entrad
 entrada ya esté en vuelo; al confirmar, `Outbox.remove(seq)` borra la entrada con la edición. Si la creación falla en la
 base, `Outbox.replace` la reescribe con la copia vieja tomada antes del envío y también borra la edición.
 Caso: KTP-8-23 / KTP-8-39  ·  Prueba: ModoOfflineKtp8Test.kt:edicionMientrasSeSubeLaCreacionNoSePierde, edicionMientrasFallaLaCreacionNoSePierde  ·  Rama/commit: ktp-8-offline / 0f62742
+Corregido en cbdfdd2.
 
 ## BUG-3 · Crear → posponer → editar sin red: gana la fecha vieja · 2026-11-26
 Gravedad: media (dato final equivocado, con salida: volver a editar)
@@ -20,6 +21,7 @@ Esperado: fecha 30 (el último cambio).   Obtenido: fecha de mañana. La edició
 primero en la cola) y el cambio de fecha del paso 2 se envía después y la pisa. Pasa igual con ★ y "en curso"
 (`SetPriority`, `SetStarted`). En pantalla también "vuelve" a la fecha vieja en la siguiente recarga.
 Caso: KTP-8-11 / KTP-8-40  ·  Prueba: ModoOfflineKtp8Test.kt:editarDespuesDePosponerSinRedGanaLaUltimaFecha  ·  Rama/commit: ktp-8-offline / 0f62742
+Corregido en cbdfdd2.
 
 ## BUG-2 · Un gasto guardado sin red no suma al total del día ni al balance · 2026-11-26
 Gravedad: media (cifra mal mientras no hay red; se corrige sola al subir)
@@ -28,6 +30,7 @@ Esperado: el gasto suma al total del día y queda marcado como pendiente.   Obte
 ("Sin conexión · se sube sola…") y `Balance.counted` solo cuenta capturas OK: el total no lo incluye. Inicio además
 lo cuenta entre los errores del día.
 Caso: KTP-8-03  ·  Prueba: ModoOfflineKtp8Test.kt:gastoSinRedSumaAlTotalDelDia  ·  Rama/commit: ktp-8-offline / 0f62742
+Corregido en cbdfdd2.
 
 ## BUG-4 · Tarea marcada Hecha sin red queda con la hora de subida · 2026-11-26
 Gravedad: media (dato mal en la base)
@@ -36,6 +39,7 @@ Esperado: `done_at` = 11:30 p.m. del día en que se marcó (sale ese día en Ter
 Obtenido (por lectura de código): `markTaskDone` solo hace `SET done = true`; `done_at` lo llena un trigger de la base
 en el momento del UPDATE, o sea, al subir. La tarea cae en el día siguiente en Terminadas hoy y en el Calendario.
 Caso: KTP-8-07  ·  Prueba: no automatizable (trigger en la base); revisar en el teléfono  ·  Rama/commit: ktp-8-offline / 0f62742
+Corregido en cbdfdd2.
 
 ## BUG-5 · Gasto capturado sin red queda en la base con la fecha de subida · 2026-11-26
 Gravedad: media (en la web/base el gasto cae en otro día o mes; en el celular el balance sí usa la hora real)
@@ -43,3 +47,4 @@ Pasos: 1. Sin red, el 31 a las 11 p.m., registrar un gasto (o llega Nu/SMS). 2. 
 Esperado: `transactions.occurred_at` = 31 a las 11 p.m.   Obtenido (por lectura de código): `insertCard` inserta
 `occurred_at = NOW()` y `received_at = NOW()`; la hora real de la captura (`Capture.at`) no se envía.
 Caso: KTP-8-19  ·  Prueba: no automatizable (SQL); revisar en la base de prueba o en la web  ·  Rama/commit: ktp-8-offline / 0f62742
+Corregido en cbdfdd2.
