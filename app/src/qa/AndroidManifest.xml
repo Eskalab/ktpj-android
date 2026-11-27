@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Spur QA: no captura gastos (ni SMS ni notificaciones de Nu) para no duplicar lo que ya guarda Spur. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.RECEIVE_SMS" tools:node="remove" />
+
+    <application>
+        <receiver android:name=".SmsReceiver" tools:node="remove" />
+        <service android:name=".NuNotificationService" tools:node="remove" />
+    </application>
+</manifest>

@@ -64,6 +64,7 @@ object SpurNotifications {
      * Tocarla abre Spur; la acción "Hecha" la completa sin abrir la app.
      */
     fun showTask(ctx: Context, task: SpurTask, reminder: Boolean) {
+        if (BuildConfig.IS_QA) return   // app de pruebas: los avisos de tareas ya los da Spur
         ensureTaskChannel(ctx)
         val text = listOfNotNull(task.due?.let { "Vence $it" }, task.description).joinToString(" · ")
         val notif = NotificationCompat.Builder(ctx, TASK_CHANNEL_ID)
