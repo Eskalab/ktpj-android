@@ -12,6 +12,20 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.stateDescription
+import co.eskala.bktpj_notification.ui.components.appLabel
+import co.eskala.bktpj_notification.ui.components.dueLabel
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -45,6 +59,7 @@ import co.eskala.bktpj_notification.ui.theme.ThemeMode
 data class NewTask(val title: String, val description: String?, val due: String?, val priority: Boolean, val app: String? = null, val projectId: String? = null, val pomos: Int? = null)
 
 /** Nueva tarea desde el celular: queda en el tablero Spur igual que las que llegan desde Claude (/spur). */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun NewTaskScreen(
     saving: Boolean,
@@ -77,55 +92,145 @@ fun NewTaskScreen(
         pomos = pomos.takeIf { it > 0 },
     )
 
-    Column(Modifier.fillMaxSize().background(c.bg).safeDrawingPadding()) {
-        Column(
-            Modifier
-                .weight(1f)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = KtpjDimens.screenPadding, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(KtpjDimens.blockGap),
+    val ctx = LocalContext.current
+    val focus = LocalFocusManager.current
+    // Qué editor está abierto debajo de los chips (uno a la vez); null = ninguno.
+    var open by rememberSaveable { mutableStateOf<TaskOption?>(null) }
+    // La épica recién creada desde el buscador aún no está en [projects]: se recuerda para el chip.
+    var createdProject by remember { mutableStateOf<TaskProject?>(null) }
+    val createProject: (suspend (String, String) -> TaskProject?)? = onCreateProject?.let { create ->
+        { name, prefix -> create(name, prefix).also { createdProject = it } }
+    }
+    val epic = projectId?.let { id ->
+        projects.firstOrNull { it.id == id } ?: initial?.project?.takeIf { it.id == id } ?: createdProject?.takeIf { it.id == id }
+    }
+    val appName = app?.let { remember(it) { appLabel(ctx, it) ?: it } }
+    val chips = taskOptionChips(due?.let { dueLabel(it) }, priority, epicShortName(epic), pomos, appName, description)
+
+    // KTP-11 opción C: título + chips con cada opción y su valor; el editor se abre debajo
+    // y el botón grande queda justo después, sin tener que desplazarse en el caso común.
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(c.bg)
+            .safeDrawingPadding()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = KtpjDimens.screenPadding, vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(KtpjDimens.blockGapSmall),
+    ) {
+        Text("TABLERO SPUR", style = t.overlineLarge, color = c.muted)
+        Text(if (initial == null) "Nueva tarea" else "Editar tarea", style = t.onboardingTitle, color = c.fg)
+        if (initial == null && onSwitchToHabit != null) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Chip("Tarea", true, {})
+                Chip("↻ Hábito", false, onSwitchToHabit)
+            }
+        }
+
+        Field("Qué hay que hacer") {
+            TextBox(title, { title = it.take(200) }, "Ej. Llamar al notario", "Título de la tarea", ImeAction.Done)
+        }
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text("TABLERO SPUR", style = t.overlineLarge, color = c.muted)
-            Text(if (initial == null) "Nueva tarea" else "Editar tarea", style = t.onboardingTitle, color = c.fg)
-            if (initial == null && onSwitchToHabit != null) {
-                androidx.compose.foundation.layout.Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Chip("Tarea", true, {})
-                    Chip("↻ Hábito", false, onSwitchToHabit)
+            chips.forEach { (option, text) ->
+                OptionChip(text, expanded = open == option, toggle = option == TaskOption.PRIORIDAD) {
+                    focus.clearFocus()
+                    if (option == TaskOption.PRIORIDAD) priority = !priority
+                    else open = if (open == option) null else option
                 }
             }
-
-            Field("Qué hay que hacer") {
-                TextBox(title, { title = it.take(200) }, "Ej. Llamar al notario", "Título de la tarea", ImeAction.Next)
-            }
-            Field("Detalle (opcional)") {
-                TextBox(description, { description = it.take(500) }, "Ej. Preguntar por la escritura", "Detalle de la tarea", ImeAction.Done)
-            }
-            Field("Fecha") {
-                DueChips(due, { due = it })
-            }
-            Field("Épica (opcional)") { EpicField(projects, projectId, { projectId = it }, onCreateProject, initial?.project) }
-            Field("Pomodoros estimados") { PomosField(pomos, { pomos = it }) }
-            initial?.let { co.eskala.bktpj_notification.ui.components.PomoSessionsList(it.id, todayOnly = false) }
-            Field("App (opcional)") {
-                AppField(app, { app = it })
-            }
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Chip("★ Prioritaria", priority, { priority = !priority })
-                Text(
-                    if (priority) "El día de su fecha (o si se atrasa) te la recuerdo cada hora, de 6:00 a.m. a 8:00 p.m., hasta que la marques como Hecha."
-                    else "Sin estrella solo aparece en la lista, sin recordatorios.",
-                    style = t.caption,
-                    color = c.muted,
-                )
+        }
+        if (priority) {
+            Text(
+                "★ Te la recuerdo cada hora (6:00 a.m. a 8:00 p.m.) el día de su fecha o si se atrasa, hasta que la marques como Hecha.",
+                style = t.caption,
+                color = c.muted,
+            )
+        }
+        open?.let { option ->
+            OptionEditor(option, onClose = { open = null }) {
+                when (option) {
+                    TaskOption.FECHA -> DueChips(due, { due = it })
+                    TaskOption.EPICA -> EpicField(projects, projectId, { projectId = it }, createProject, initial?.project)
+                    TaskOption.POMOS -> PomosField(pomos, { pomos = it })
+                    TaskOption.APP -> AppField(app, { app = it })
+                    TaskOption.DETALLE -> TextBox(description, { description = it.take(500) }, "Ej. Preguntar por la escritura", "Detalle de la tarea", ImeAction.Done)
+                    TaskOption.PRIORIDAD -> Unit
+                }
             }
         }
         Column(
-            Modifier.padding(start = KtpjDimens.screenPadding, end = KtpjDimens.screenPadding, top = 14.dp, bottom = 22.dp),
+            Modifier.padding(top = 4.dp),
             verticalArrangement = Arrangement.spacedBy(KtpjDimens.cardGapSmall),
         ) {
             PrimaryButton(if (saving) "Guardando…" else if (initial == null) "Crear tarea" else "Guardar cambios", onClick = { onSave(build()) }, enabled = canSave)
             SecondaryButton("Cancelar", onClick = onCancel, enabled = !saving)
         }
+        initial?.let { co.eskala.bktpj_notification.ui.components.PomoSessionsList(it.id, todayOnly = false) }
+    }
+}
+
+/** Chip de opción: muestra el valor actual; relleno si tiene valor, borde grueso si su editor está abierto. */
+@Composable
+private fun OptionChip(text: OptionChipText, expanded: Boolean, toggle: Boolean, onClick: () -> Unit) {
+    val c = KtpjTheme.colors
+    Box(
+        Modifier
+            .heightIn(min = KtpjDimens.minTouchTarget)
+            .clip(KtpjShapes.pill)
+            .then(if (text.set) Modifier.background(c.invBg) else Modifier)
+            .border(if (expanded) KtpjDimens.borderField * 1.5f else KtpjDimens.borderCard, if (expanded) c.fg else c.border, KtpjShapes.pill)
+            .clickable(role = if (toggle) Role.Switch else Role.Button, onClick = onClick)
+            .semantics {
+                contentDescription = text.spoken
+                stateDescription = when {
+                    toggle -> if (text.set) "activada" else "desactivada"
+                    expanded -> "abierto, toca para cerrar"
+                    else -> "toca para cambiar"
+                }
+            }
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(text.label, style = KtpjTheme.type.captionStrong, color = if (text.set) c.invFg else c.fg)
+    }
+}
+
+/** Panel en línea con el editor de una opción y un "Listo" para cerrarlo. */
+@Composable
+private fun OptionEditor(option: TaskOption, onClose: () -> Unit, content: @Composable () -> Unit) {
+    val c = KtpjTheme.colors
+    val title = when (option) {
+        TaskOption.FECHA -> "Fecha"
+        TaskOption.EPICA -> "Épica"
+        TaskOption.POMOS -> "Pomodoros estimados"
+        TaskOption.APP -> "App"
+        TaskOption.DETALLE -> "Detalle"
+        TaskOption.PRIORIDAD -> "Prioritaria"
+    }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .border(KtpjDimens.borderCard, c.border, KtpjShapes.row)
+            .padding(KtpjDimens.cardPadding),
+        verticalArrangement = Arrangement.spacedBy(KtpjDimens.cardGapSmall),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(title, style = KtpjTheme.type.rowTitle, color = c.fg, modifier = Modifier.weight(1f))
+            Box(
+                Modifier
+                    .heightIn(min = KtpjDimens.minTouchTarget)
+                    .clip(KtpjShapes.pill)
+                    .clickable(role = Role.Button, onClickLabel = "Cerrar $title", onClick = onClose)
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("Listo", style = KtpjTheme.type.buttonSecondary, color = c.fg)
+            }
+        }
+        content()
     }
 }
 
@@ -165,5 +270,11 @@ private fun TextBox(value: String, onChange: (String) -> Unit, placeholder: Stri
 @Preview(name = "Nueva tarea — Claro", widthDp = 360, heightDp = 760)
 @Composable
 private fun NewTaskPreview() = KtpjTheme(ThemeMode.LIGHT) {
+    NewTaskScreen(saving = false, onSave = {}, onCancel = {})
+}
+
+@Preview(name = "Nueva tarea — Oscuro, fuente grande", widthDp = 360, heightDp = 760, fontScale = 1.6f)
+@Composable
+private fun NewTaskDarkPreview() = KtpjTheme(ThemeMode.DARK) {
     NewTaskScreen(saving = false, onSave = {}, onCancel = {})
 }
