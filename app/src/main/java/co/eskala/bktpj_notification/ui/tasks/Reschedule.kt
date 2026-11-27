@@ -2,11 +2,13 @@ package co.eskala.bktpj_notification.ui.tasks
 
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.ui.input.pointer.pointerInput
+import co.eskala.bktpj_notification.ui.theme.KtpjDimens
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -86,10 +88,10 @@ fun RescheduleChips(
     modifier: Modifier = Modifier,
 ) {
     val ref = taskRef(task)
+    // Sin separación: las áreas de toque de 44dp quedan pegadas (la píldora visual deja el aire),
+    // y lo que caiga en la fila sin tocar un botón no abre "Editar tarea".
     FlowRow(
-        modifier.padding(top = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+        modifier.blockParentClicks().padding(top = 2.dp),
     ) {
         SmallChip("Hoy", "Pasar a hoy $ref", enabled) { onQuick(QuickDue.HOY) }
         SmallChip("Mañana", "Pasar a mañana $ref", enabled) { onQuick(QuickDue.MANANA) }
@@ -97,21 +99,42 @@ fun RescheduleChips(
     }
 }
 
-/** Píldora pequeña con borde, como los chips de fecha pero más compacta para ir dentro de la tarjeta. */
+/**
+ * Píldora pequeña con borde (32dp visibles) dentro de un área de toque de al menos
+ * [KtpjDimens.minTouchTarget] (44dp): un toque en el borde sigue siendo del botón.
+ */
 @Composable
 internal fun SmallChip(text: String, label: String, enabled: Boolean, onClick: () -> Unit) {
     val c = KtpjTheme.colors
     Box(
         Modifier
-            .heightIn(min = 32.dp)
+            .sizeIn(minWidth = KtpjDimens.minTouchTarget, minHeight = KtpjDimens.minTouchTarget)
+            .blockParentClicks()   // por fuera del clickable: deshabilitado o no, el toque no llega a la tarjeta ni al encabezado
             .alpha(if (enabled) 1f else 0.4f)
             .clip(KtpjShapes.pill)
-            .border(1.dp, c.border, KtpjShapes.pill)
             .clickable(enabled = enabled, role = Role.Button, onClickLabel = label, onClick = onClick)
             .semantics { contentDescription = label }
-            .padding(horizontal = 12.dp, vertical = 6.dp),
+            .padding(horizontal = 4.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text, style = KtpjTheme.type.captionStrong, color = c.fg)
+        Box(
+            Modifier
+                .heightIn(min = 32.dp)
+                .border(1.dp, c.border, KtpjShapes.pill)
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(text, style = KtpjTheme.type.captionStrong, color = c.fg)
+        }
+    }
+}
+
+/**
+ * Consume los toques que lleguen aquí después de los hijos (pase Main: hijo → padre), así los
+ * botones internos funcionan pero el clickable de la tarjeta o del encabezado no los recibe.
+ */
+private fun Modifier.blockParentClicks(): Modifier = pointerInput(Unit) {
+    awaitPointerEventScope {
+        while (true) awaitPointerEvent().changes.forEach { it.consume() }
     }
 }
