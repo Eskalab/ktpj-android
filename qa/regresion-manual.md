@@ -10,7 +10,8 @@ Antes de una versión grande, hazlo completo.
 
 | Si cambió… | Revisa las secciones |
 |---|---|
-| `Pomodoro.kt`, `PomodoroScreen.kt`, `Pomos.kt` | A, B |
+| `Pomodoro.kt`, `PomodoroScreen.kt`, `Pomos.kt` | A, B, J |
+| `PomoLog.kt`, `PomoSessions.kt`, `CalendarScreen.kt` | J, B |
 | `Habits.kt`, `HabitScreen.kt`, `NewHabitScreen.kt`, `ui/components/Habits.kt` | C, B |
 | `SpurTasks.kt`, `Tasks.kt`, `TasksScreen.kt`, `NewTaskScreen.kt`, `NextTaskDialog.kt` | D, E |
 | `Projects.kt`, `EpicScreen.kt` | E, D |
@@ -80,3 +81,12 @@ Antes de una versión grande, hazlo completo.
 - [ ] Con **TalkBack** se puede marcar una tarea, un hábito y empezar un pomodoro.
 - [ ] Con letra grande del sistema nada se corta ni se monta.
 - [ ] Títulos muy largos (3 líneas) no rompen las filas ni el pomodoro.
+
+## J · Registro de pomodoros y calendario
+- [ ] Hacer un enfoque completo, uno saltado y uno detenido → en el pomodoro salen con 🍅, ⏭ y ◐ y sus horas.
+- [ ] Un enfoque de menos de 1 minuto no se anota; los descansos tampoco.
+- [ ] Las pausas no cuentan en los minutos de enfoque.
+- [ ] Al editar la tarea se ve su historial agrupado por día; en el hábito, sus últimos enfoques.
+- [ ] **Tareas › Calendario**: el día de hoy tiene punto; al tocarlo salen los bloques (naranja tarea, verde hábito) y las tareas terminadas a su hora.
+- [ ] Una tarea terminada a las 11 p.m. aparece ese día, no el siguiente (hora de Bogotá).
+- [ ] Cambiar de mes y volver funciona; un día sin actividad dice que no hay nada.
