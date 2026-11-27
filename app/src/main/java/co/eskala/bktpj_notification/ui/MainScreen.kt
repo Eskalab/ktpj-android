@@ -756,6 +756,11 @@ fun MainScreen(
                             if (r.isFailure) Toast.makeText(ctx, "No se pudo cambiar la fecha: ${r.exceptionOrNull()?.message}", Toast.LENGTH_LONG).show()
                         }
                     },
+                    onReschedule = { task, due ->
+                        val r = SpurTasks.setDue(ctx, task.id, due)
+                        if (r.isFailure) Toast.makeText(ctx, "No se pudo cambiar la fecha: ${r.exceptionOrNull()?.message}", Toast.LENGTH_LONG).show()
+                        r.isSuccess
+                    },
                 )
 
                 Tab.GASTOS -> GastosScreen(
