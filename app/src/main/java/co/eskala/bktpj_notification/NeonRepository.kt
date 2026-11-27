@@ -129,6 +129,7 @@ object NeonRepository {
         columnId: String,
         source: CaptureSource = CaptureSource.NU,
         withTransaction: Boolean = true,
+        location: TxLocation? = null,
     ): Result<String> {
         val cardId = UUID.randomUUID().toString()
         val txId   = UUID.randomUUID().toString()
@@ -157,10 +158,12 @@ object NeonRepository {
         val txQuery = """
             INSERT INTO transactions (
                 id, message_id, account, bank, amount, currency,
-                merchant, last4, occurred_at, received_at, status, raw_snippet, created_at
+                merchant, last4, occurred_at, received_at, status, raw_snippet, created_at,
+                location_lat, location_lng, location_address
             ) VALUES (
                 $1, $2, $6, $7, $3, 'COP',
-                $4, $8, NOW(), NOW(), 'UNREVIEWED', $5, NOW()
+                $4, $8, NOW(), NOW(), 'UNREVIEWED', $5, NOW(),
+                $9::double precision, $10::double precision, $11::text
             )
             ON CONFLICT (message_id) DO NOTHING
         """.trimIndent()
@@ -184,7 +187,7 @@ object NeonRepository {
         val card = sql(ctx, cardQuery, listOf(columnId, cardId, tx.title, tx.rawText, srcId, sourceFrom, sourceType))
         if (card.isFailure) return Result.failure(card.exceptionOrNull()!!)
         if (withTransaction && tx.recordTransaction) {
-            sql(ctx, txQuery, listOf(txId, srcId, amount, tx.merchant ?: account, tx.rawText, account, bank, tx.last4))
+            sql(ctx, txQuery, listOf(txId, srcId, amount, tx.merchant ?: account, tx.rawText, account, bank, tx.last4) + TxLocation.sqlParams(location))
         }
 
         return Result.success(cardId)

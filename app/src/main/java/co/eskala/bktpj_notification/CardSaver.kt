@@ -17,7 +17,12 @@ object CardSaver {
         captureId: String = UUID.randomUUID().toString(),
         at: Long = System.currentTimeMillis(),
         notify: Boolean = true,
+        // Reintento: la ubicación ORIGINAL de la captura (o null). Captura nueva: se busca ahora.
+        location: TxLocation? = null,
+        locate: Boolean = true,
     ): Capture {
+        val loc = location ?: if (locate && tx.recordTransaction) TxLocator.capture(ctx) else null
+
         val inboxId = Prefs.getColumnInbox(ctx)
         val hoyId = Prefs.getColumnHoy(ctx)
         // Hoy es opcional: si está vacío o es la misma columna que Inbox, solo se crea una tarjeta.
@@ -27,7 +32,7 @@ object CardSaver {
         val error: String? = if (inboxId.isEmpty()) {
             "Configura las columnas de destino"
         } else {
-            val r1 = NeonRepository.insertCard(ctx, tx, inboxId, source)
+            val r1 = NeonRepository.insertCard(ctx, tx, inboxId, source, location = loc)
             val r2 = if (alsoHoy && r1.isSuccess) {
                 NeonRepository.insertCard(ctx, tx, hoyId, source, withTransaction = false)
             } else r1
@@ -43,6 +48,7 @@ object CardSaver {
             status = if (error == null) CaptureStatus.OK else CaptureStatus.ERROR,
             error = error,
             destinations = destinations,
+            location = loc,
         )
         CaptureLog.put(ctx, capture)
 
@@ -57,6 +63,6 @@ object CardSaver {
     suspend fun retry(ctx: Context, captureId: String): Capture? {
         val c = CaptureLog.get(ctx, captureId) ?: return null
         SpurNotifications.cancelError(ctx, captureId)
-        return save(ctx, c.tx, c.source, captureId = c.id, at = c.at)
+        return save(ctx, c.tx, c.source, captureId = c.id, at = c.at, location = c.location, locate = false)
     }
 }

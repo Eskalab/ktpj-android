@@ -23,6 +23,8 @@ data class Capture(
     val status: CaptureStatus,
     val error: String? = null,
     val destinations: String = "Inbox",   // "Inbox" | "Inbox + Hoy"
+    // Dónde estaba el teléfono al capturar (KTP-7); null = apagado, sin permiso o sin fix.
+    val location: TxLocation? = null,
 ) {
     /** Nombre para mostrar: comercio, o el título sin el prefijo "Nu: ". */
     val label: String
@@ -99,6 +101,7 @@ object CaptureLog {
                 status = CaptureStatus.valueOf(o.getString("status")),
                 error = o.optStringOrNull("error"),
                 destinations = o.optString("destinations", "Inbox"),
+                location = readLocation(o),
             )
         }
     }
@@ -123,11 +126,32 @@ object CaptureLog {
                 put("status", c.status.name)
                 put("error", c.error ?: JSONObject.NULL)
                 put("destinations", c.destinations)
+                c.location?.let { l ->
+                    put("location", JSONObject().apply {
+                        put("lat", l.lat)
+                        put("lng", l.lng)
+                        put("accuracy", l.accuracyM?.toDouble() ?: JSONObject.NULL)
+                        put("address", l.address ?: JSONObject.NULL)
+                        put("fixAt", l.fixAt)
+                    })
+                }
             })
         }
         val tmp = File(f.parentFile, "$FILE.tmp")
         tmp.writeText(arr.toString())
         tmp.renameTo(f)
+    }
+
+    private fun readLocation(o: JSONObject): TxLocation? {
+        val l = o.optJSONObject("location") ?: return null
+        if (!l.has("lat") || !l.has("lng")) return null
+        return TxLocation(
+            lat = l.getDouble("lat"),
+            lng = l.getDouble("lng"),
+            accuracyM = if (l.isNull("accuracy")) null else l.optDouble("accuracy").toFloat(),
+            address = l.optStringOrNull("address"),
+            fixAt = l.optLong("fixAt", 0L),
+        )
     }
 
     private fun JSONObject.optStringOrNull(key: String): String? =

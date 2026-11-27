@@ -11,6 +11,12 @@
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" android:maxSdkVersion="32" />
     <uses-feature android:name="android.hardware.telephony" android:required="false" />
+    <!-- KTP-7: ubicación del teléfono al capturar una transacción (opcional, se activa en Ajustes).
+         Segundo plano porque Nu y Davivienda llegan con la app cerrada. Solo para transacciones. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <uses-feature android:name="android.hardware.location" android:required="false" />
 
     <!-- Para elegir la app que abre una tarea: lista solo las apps con ícono en el launcher -->
     <queries>

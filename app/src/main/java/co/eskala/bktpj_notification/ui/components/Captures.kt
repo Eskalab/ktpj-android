@@ -25,6 +25,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import co.eskala.bktpj_notification.Capture
 import co.eskala.bktpj_notification.CaptureStatus
+import co.eskala.bktpj_notification.TxLocation
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import co.eskala.bktpj_notification.ui.theme.KtpjDimens
 import co.eskala.bktpj_notification.ui.theme.KtpjShapes
 import co.eskala.bktpj_notification.ui.theme.KtpjTheme
@@ -85,6 +88,7 @@ fun CaptureCard(capture: Capture, onRetry: () -> Unit, retrying: Boolean) {
                 style = t.caption,
                 color = if (isError) c.onAccent else c.muted,
             )
+            capture.location?.let { LocationLine(it, color = if (isError) c.onAccent else c.muted) }
         }
         if (isError) {
             RetryPill(onRetry, retrying, onAccentBackground = true)
@@ -92,6 +96,19 @@ fun CaptureCard(capture: Capture, onRetry: () -> Unit, retrying: Boolean) {
             capture.signedAmount?.let { Text(it, style = t.amount, color = amountColor(capture)) }
         }
     }
+}
+
+/** "📍 Cra 7 #45-10, Bogotá": dónde estaba el teléfono al capturar (KTP-7). Una línea, tenue. */
+@Composable
+fun LocationLine(location: TxLocation, color: Color = KtpjTheme.colors.muted, modifier: Modifier = Modifier) {
+    Text(
+        location.label,
+        style = KtpjTheme.type.caption,
+        color = color,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = modifier.semantics { contentDescription = location.spokenLabel },
+    )
 }
 
 /** Pill "Reintentar". Sobre accent: fondo onAccent + texto accentInk; en listas: fondo accent + onAccent. */
