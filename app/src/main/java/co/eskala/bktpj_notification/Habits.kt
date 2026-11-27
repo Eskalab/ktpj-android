@@ -135,9 +135,26 @@ object Habits {
 
     suspend fun sync(ctx: Context): Result<List<Habit>> {
         val r = NeonRepository.fetchHabits(ctx, HabitDates.daysAgo(190))
-        r.onSuccess { _habits.value = it; error.value = null; remind(ctx, it) }
-            .onFailure { error.value = it.message }
+        r.onSuccess { OfflineCache.saveHabits(ctx, it); show(ctx, it); error.value = null; remind(ctx, _habits.value) }
+            .onFailure { error.value = if (OfflineSync.isNetworkError(it)) null else it.message }
         return r
+    }
+
+    // ── KTP-8: sin conexión. Marcar / desmarcar va a la cola y se ve al instante. ──
+
+    private fun show(ctx: Context, list: List<Habit>, ops: List<OutboxOp> = Outbox.pendingOps(ctx)) {
+        _habits.value = OutboxPolicy.applyToHabits(list, ops)
+    }
+
+    /** Lo último guardado, si aún no se ha leído nada (lo llama SpurTasks.restoreCache). */
+    fun restoreCache(ctx: Context) {
+        if (_habits.value.isEmpty()) OfflineCache.get(ctx).habits?.let { show(ctx, it) }
+    }
+
+    private fun local(ctx: Context, op: OutboxOp) {
+        Outbox.enqueue(ctx, op)
+        show(ctx, _habits.value, listOf(op))
+        OfflineSync.kick(ctx)
     }
 
     suspend fun create(ctx: Context, d: HabitDraft): Result<String> =
@@ -151,20 +168,14 @@ object Habits {
 
     /** Marca [day] (hoy por defecto). Se ve al instante; si falla, se revierte. */
     suspend fun check(ctx: Context, id: String, amount: Int?, day: String = HabitDates.today()): Result<Unit> {
-        val before = _habits.value
-        _habits.value = before.map { if (it.id == id) it.copy(checks = it.checks + (day to amount)) else it }
-        val r = NeonRepository.checkHabit(ctx, id, day, amount)
-        if (r.isFailure) _habits.value = before
-        else if (day == HabitDates.today()) NotificationManagerCompat.from(ctx).cancel(notifId(id))
-        return r
+        local(ctx, OutboxOp.CheckHabit(id, day, amount))
+        if (day == HabitDates.today()) NotificationManagerCompat.from(ctx).cancel(notifId(id))
+        return Result.success(Unit)
     }
 
     suspend fun uncheck(ctx: Context, id: String, day: String = HabitDates.today()): Result<Unit> {
-        val before = _habits.value
-        _habits.value = before.map { if (it.id == id) it.copy(checks = it.checks - day) else it }
-        val r = NeonRepository.uncheckHabit(ctx, id, day)
-        if (r.isFailure) _habits.value = before
-        return r
+        local(ctx, OutboxOp.UncheckHabit(id, day))
+        return Result.success(Unit)
     }
 
     // ── Aviso: una vez al día, desde la hora elegida, solo si toca hoy y no se ha hecho ──

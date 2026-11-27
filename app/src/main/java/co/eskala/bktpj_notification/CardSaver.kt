@@ -17,21 +17,32 @@ object CardSaver {
         captureId: String = UUID.randomUUID().toString(),
         at: Long = System.currentTimeMillis(),
         notify: Boolean = true,
+        // Reintento: la ubicación ORIGINAL de la captura (o null). Captura nueva: se busca ahora.
+        location: TxLocation? = null,
+        locate: Boolean = true,
     ): Capture {
+        val loc = location ?: if (locate && tx.recordTransaction) TxLocator.capture(ctx) else null
+
         val inboxId = Prefs.getColumnInbox(ctx)
         val hoyId = Prefs.getColumnHoy(ctx)
         // Hoy es opcional: si está vacío o es la misma columna que Inbox, solo se crea una tarjeta.
         val alsoHoy = hoyId.isNotEmpty() && hoyId != inboxId
         val destinations = if (alsoHoy) "Inbox + Hoy" else "Inbox"
 
+        // KTP-8: id estable por captura para que un reintento (automático al volver la red) no duplique la
+        // tarjeta ni la transacción (ON CONFLICT en source_message_id / message_id).
+        val tx = if (tx.messageId == null) tx.copy(messageId = "nu_$captureId") else tx
+        var offline = false
         val error: String? = if (inboxId.isEmpty()) {
             "Configura las columnas de destino"
         } else {
-            val r1 = NeonRepository.insertCard(ctx, tx, inboxId, source)
+            val r1 = NeonRepository.insertCard(ctx, tx, inboxId, source, location = loc, occurredAt = at)
             val r2 = if (alsoHoy && r1.isSuccess) {
                 NeonRepository.insertCard(ctx, tx, hoyId, source, withTransaction = false)
             } else r1
-            r1.exceptionOrNull()?.message ?: r2.exceptionOrNull()?.let { "Hoy: ${it.message}" }
+            offline = OfflineSync.isNetworkError(r1.exceptionOrNull() ?: r2.exceptionOrNull())
+            if (offline) OfflineSync.OFFLINE_MESSAGE
+            else r1.exceptionOrNull()?.message ?: r2.exceptionOrNull()?.let { "Hoy: ${it.message}" }
                 ?: if (r1.isFailure || r2.isFailure) "Error desconocido" else null
         }
 
@@ -43,12 +54,22 @@ object CardSaver {
             status = if (error == null) CaptureStatus.OK else CaptureStatus.ERROR,
             error = error,
             destinations = destinations,
+            location = loc,
         )
         CaptureLog.put(ctx, capture)
 
+        // Sin red: queda en la cola de capturas y se sube sola; el error solo se avisa si ya no se reintentará.
+        val outcome = when {
+            error == null -> CaptureRetryPolicy.Outcome.OK
+            offline -> CaptureRetryPolicy.Outcome.NETWORK
+            else -> CaptureRetryPolicy.Outcome.SERVER
+        }
+        val notifyError = PendingCaptures.onResult(ctx, captureId, outcome)
+        if (offline) OfflineSync.scheduleWork(ctx)
+
         if (notify) {
             if (error == null) SpurNotifications.showSaved(ctx, capture)
-            else SpurNotifications.showError(ctx, capture)
+            else if (notifyError) SpurNotifications.showError(ctx, capture)
         }
         return capture
     }
@@ -57,6 +78,6 @@ object CardSaver {
     suspend fun retry(ctx: Context, captureId: String): Capture? {
         val c = CaptureLog.get(ctx, captureId) ?: return null
         SpurNotifications.cancelError(ctx, captureId)
-        return save(ctx, c.tx, c.source, captureId = c.id, at = c.at)
+        return save(ctx, c.tx, c.source, captureId = c.id, at = c.at, location = c.location, locate = false)
     }
 }

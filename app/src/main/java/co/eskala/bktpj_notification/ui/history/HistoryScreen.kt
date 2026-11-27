@@ -39,6 +39,7 @@ import co.eskala.bktpj_notification.ui.components.RetryPill
 import co.eskala.bktpj_notification.ui.components.amountColor
 import co.eskala.bktpj_notification.ui.components.hour
 import co.eskala.bktpj_notification.ui.home.sampleCaptures
+import co.eskala.bktpj_notification.ui.components.LocationLine
 import co.eskala.bktpj_notification.ui.theme.KtpjDimens
 import co.eskala.bktpj_notification.ui.theme.KtpjTheme
 import co.eskala.bktpj_notification.ui.theme.ThemeMode
@@ -178,6 +179,7 @@ private fun HistoryRow(cap: Capture, retrying: Boolean, onRetry: () -> Unit, isF
                 RetryPill(onRetry, retrying, onAccentBackground = false)
             }
         }
+        cap.location?.let { LocationLine(it) }
     }
 }
 
