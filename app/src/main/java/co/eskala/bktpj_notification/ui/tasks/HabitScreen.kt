@@ -30,12 +30,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import co.eskala.bktpj_notification.Habit
 import co.eskala.bktpj_notification.HabitDates
@@ -44,6 +47,7 @@ import co.eskala.bktpj_notification.ui.components.AmountDialog
 import co.eskala.bktpj_notification.ui.components.AppLink
 import co.eskala.bktpj_notification.ui.components.HabitRow
 import co.eskala.bktpj_notification.ui.components.OutlinePill
+import co.eskala.bktpj_notification.ui.components.PrimaryButton
 import co.eskala.bktpj_notification.ui.components.ProjectTag
 import co.eskala.bktpj_notification.ui.components.SecondaryButton
 import co.eskala.bktpj_notification.ui.theme.KtpjDimens
@@ -59,7 +63,8 @@ private const val WEEKS = 15
 /**
  * Hábito: racha actual y mejor, este mes, y una cuadrícula de las últimas semanas (un cuadro por día:
  * verde = hecho, borde = tocaba y no se hizo, tenue = no tocaba). Tocar un día pasado lo marca o desmarca,
- * por si se olvidó registrarlo.
+ * por si se olvidó registrarlo. "⏸ Pausar" (viaje, enfermo…) lo saca de Inicio y de los avisos sin romper la
+ * racha; los días en pausa salen rayados en la cuadrícula.
  */
 @Composable
 fun HabitScreen(habit: Habit, onBack: () -> Unit, onEdit: () -> Unit, onStart: () -> Unit = {}) {
@@ -69,6 +74,18 @@ fun HabitScreen(habit: Habit, onBack: () -> Unit, onEdit: () -> Unit, onStart: (
     val scope = rememberCoroutineScope()
     var confirmArchive by remember { mutableStateOf(false) }
     var editingDay by remember { mutableStateOf<String?>(null) }
+    var askingPause by remember { mutableStateOf(false) }
+    var pauseBusy by remember { mutableStateOf(false) }
+    val pause = habit.currentPause
+
+    fun changePause(action: suspend () -> Result<Unit>) {
+        pauseBusy = true
+        scope.launch {
+            val r = action()
+            pauseBusy = false
+            if (r.isFailure) Toast.makeText(ctx, "No se pudo: ${r.exceptionOrNull()?.message}", Toast.LENGTH_LONG).show()
+        }
+    }
     val streak = habit.streak()
     val best = maxOf(habit.bestStreak(), streak)
     val (monthDone, monthDue) = habit.monthRate()
@@ -92,6 +109,10 @@ fun HabitScreen(habit: Habit, onBack: () -> Unit, onEdit: () -> Unit, onStart: (
                     modifier = Modifier.clip(KtpjShapes.pill).clickable(role = Role.Button, onClick = onBack).padding(vertical = 8.dp),
                 )
                 Spacer(Modifier.weight(1f))
+                if (pause == null) {
+                    OutlinePill(if (pauseBusy) "…" else "⏸ Pausar", onClick = { askingPause = true }, enabled = !pauseBusy)
+                    Spacer(Modifier.width(8.dp))
+                }
                 OutlinePill("Editar", onClick = onEdit)
             }
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -110,12 +131,33 @@ fun HabitScreen(habit: Habit, onBack: () -> Unit, onEdit: () -> Unit, onStart: (
                 habit.app?.let { AppLink(it) }
             }
 
+            // En pausa: hasta cuándo, motivo y reanudar (desde hoy vuelve a tocar).
+            if (pause != null) {
+                Column(
+                    Modifier.fillMaxWidth().clip(KtpjShapes.card).background(c.card).padding(KtpjDimens.cardPadding),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text(pause.label(), style = t.rowTitle, color = c.fg)
+                    Text(
+                        (pause.end?.let { "Vuelve el ${HabitDates.short(HabitDates.plusDays(it, 1))}. " } ?: "Sin fecha fija. ") +
+                            "No sale en Inicio, no te avisa y no rompe la racha; si lo haces igual, cuenta.",
+                        style = t.secondary,
+                        color = c.muted,
+                    )
+                    OutlinePill(
+                        if (pauseBusy) "…" else "▶ Reanudar",
+                        onClick = { changePause { Habits.resume(ctx, habit.id) } },
+                        enabled = !pauseBusy,
+                    )
+                }
+            }
+
             // Hoy: marcar y, aparte, un botón grande para el pomodoro (siempre, aunque ya esté hecho:
             // leer de más también vale).
             HabitRow(habit, onOpen = {})
             val pomo by co.eskala.bktpj_notification.Pomodoro.state.collectAsState()
             val running = pomo?.taskId == habit.id
-            co.eskala.bktpj_notification.ui.components.PrimaryButton(
+            if (pause == null || running) PrimaryButton(
                 if (running) "● Volver al pomodoro" else "▶ Empezar pomodoro",
                 onClick = onStart,
             )
@@ -137,6 +179,7 @@ fun HabitScreen(habit: Habit, onBack: () -> Unit, onEdit: () -> Unit, onStart: (
                     Legend(c.green, null, "hecho")
                     Legend(Color.Transparent, c.muted, "tocaba")
                     Legend(c.line, null, "no tocaba")
+                    if (habit.pauses.isNotEmpty()) Legend(Color.Transparent, null, "pausa", striped = true)
                 }
                 Text("Toca un día pasado para marcarlo si se te olvidó registrarlo.", style = t.caption, color = c.muted)
             }
@@ -183,6 +226,14 @@ fun HabitScreen(habit: Habit, onBack: () -> Unit, onEdit: () -> Unit, onStart: (
         }
     }
 
+    if (askingPause) {
+        HabitPauseDialog(
+            habit = habit,
+            onPause = { end, reason -> askingPause = false; changePause { Habits.pause(ctx, habit.id, end, reason) } },
+            onDismiss = { askingPause = false },
+        )
+    }
+
     editingDay?.let { day ->
         AmountDialog(
             habit = habit,
@@ -205,17 +256,29 @@ private fun Stat(value: String, label: String, modifier: Modifier) {
 }
 
 @Composable
-private fun Legend(fill: Color, border: Color?, label: String) {
+private fun Legend(fill: Color, border: Color?, label: String, striped: Boolean = false) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         Box(
             Modifier.size(10.dp).clip(RoundedCornerShape(2.dp)).background(fill)
+                .then(if (striped) Modifier.pauseStripes(KtpjTheme.colors.muted) else Modifier)
                 .then(if (border != null) Modifier.border(1.dp, border, RoundedCornerShape(2.dp)) else Modifier)
         )
         Text(label, style = KtpjTheme.type.caption, color = KtpjTheme.colors.muted)
     }
 }
 
-/** Columnas = semanas (la última es la actual), filas = lunes … domingo. */
+/** Rayas diagonales tenues: día en pausa. */
+private fun Modifier.pauseStripes(color: Color): Modifier = drawBehind {
+    drawRect(color.copy(alpha = 0.12f))
+    val step = size.minDimension / 3f
+    var x = -size.height
+    while (x < size.width) {
+        drawLine(color.copy(alpha = 0.45f), Offset(x, size.height), Offset(x + size.height, 0f), strokeWidth = 1.dp.toPx())
+        x += step
+    }
+}
+
+/** Columnas = semanas (la última es la actual), filas = lunes … domingo. Días en pausa: rayados. */
 @Composable
 private fun HabitGrid(habit: Habit, onTapDay: (String) -> Unit) {
     val c = KtpjTheme.colors
@@ -227,7 +290,9 @@ private fun HabitGrid(habit: Habit, onTapDay: (String) -> Unit) {
         add(Calendar.DAY_OF_YEAR, -dow - 7 * (WEEKS - 1))
     }
     val labels = listOf("L", "", "X", "", "V", "", "D")
-    BoxWithConstraints(Modifier.fillMaxWidth().semantics { contentDescription = "Cuadrícula de días cumplidos" }) {
+    val gridDesc = "Cuadrícula de días cumplidos" +
+        if (habit.pauses.isNotEmpty()) "; los días en pausa salen rayados" else ""
+    BoxWithConstraints(Modifier.fillMaxWidth().semantics { contentDescription = gridDesc }) {
         val gap = 3.dp
         val labelW = 14.dp
         val cell = ((maxWidth - labelW - gap * WEEKS) / WEEKS).coerceAtMost(22.dp)
@@ -242,8 +307,16 @@ private fun HabitGrid(habit: Habit, onTapDay: (String) -> Unit) {
                         val iso = HabitDates.iso(cal)
                         val future = iso > todayIso
                         val done = habit.doneOn(iso)
+                        val paused = !future && habit.isPausedOn(iso)
                         val scheduled = habit.scheduledOn(cal)
                         val shape = RoundedCornerShape(3.dp)
+                        val state = when {
+                            future -> ""
+                            done -> "hecho"
+                            paused -> "en pausa"
+                            scheduled -> "no hecho"
+                            else -> "no tocaba"
+                        }
                         Box(
                             Modifier
                                 .size(cell)
@@ -252,18 +325,25 @@ private fun HabitGrid(habit: Habit, onTapDay: (String) -> Unit) {
                                     when {
                                         future -> Color.Transparent
                                         done -> c.green
+                                        paused -> Color.Transparent
                                         scheduled -> Color.Transparent
                                         else -> c.line
                                     }
                                 )
+                                .then(if (paused && !done) Modifier.pauseStripes(c.muted) else Modifier)
                                 .then(
                                     when {
                                         iso == todayIso -> Modifier.border(2.dp, c.fg, shape)
-                                        !future && !done && scheduled -> Modifier.border(1.dp, c.muted, shape)
+                                        !future && !done && !paused && scheduled -> Modifier.border(1.dp, c.muted, shape)
                                         else -> Modifier
                                     }
                                 )
-                                .then(if (!future) Modifier.clickable(role = Role.Checkbox, onClickLabel = dayLabel(iso)) { onTapDay(iso) } else Modifier),
+                                .then(
+                                    if (!future) Modifier
+                                        .clickable(role = Role.Checkbox, onClickLabel = dayLabel(iso)) { onTapDay(iso) }
+                                        .semantics { stateDescription = state }
+                                    else Modifier
+                                ),
                         )
                     }
                 }

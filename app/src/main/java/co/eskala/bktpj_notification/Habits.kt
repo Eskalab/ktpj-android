@@ -34,11 +34,21 @@ data class Habit(
     val app: String?,
     val project: TaskProject?,
     val checks: Map<String, Int?>,
+    val pauses: List<HabitPause> = emptyList(),   // historial de pausas (viaje, enfermo…)
 ) {
     fun scheduledOn(cal: Calendar): Boolean = days.isEmpty() || (cal.get(Calendar.DAY_OF_WEEK) - 1) in days
     fun doneOn(day: String): Boolean = day in checks
     val doneToday: Boolean get() = doneOn(HabitDates.today())
-    val dueToday: Boolean get() = scheduledOn(Calendar.getInstance())
+
+    /** En pausa ese día (YYYY-MM-DD). Una pausa vencida deja de aplicar sola. */
+    fun isPausedOn(day: String): Boolean = pauses.any { it.covers(day) }
+    fun pauseOn(day: String): HabitPause? = pauses.lastOrNull { it.covers(day) }
+    val currentPause: HabitPause? get() = pauseOn(HabitDates.today())
+    val pausedToday: Boolean get() = currentPause != null
+
+    /** Toca ese día y no está en pausa. Los días en pausa cuentan como días que no tocan. */
+    fun dueOn(cal: Calendar): Boolean = scheduledOn(cal) && !isPausedOn(HabitDates.iso(cal))
+    val dueToday: Boolean get() = dueOn(Calendar.getInstance())
     val active: Boolean get() = project?.paused != true
 
     /** Meta corta: "10 páginas", "20 min"… */
@@ -47,11 +57,11 @@ data class Habit(
     /** Días seguidos cumplidos. Los días que no tocan no rompen la racha; hoy sin hacer todavía tampoco. */
     fun streak(now: Calendar = Calendar.getInstance()): Int {
         val cal = now.clone() as Calendar
-        if (scheduledOn(cal) && !doneOn(HabitDates.iso(cal))) cal.add(Calendar.DAY_OF_YEAR, -1)
+        if (dueOn(cal) && !doneOn(HabitDates.iso(cal))) cal.add(Calendar.DAY_OF_YEAR, -1)
         var n = 0
         repeat(400) {
             val d = HabitDates.iso(cal)
-            if (scheduledOn(cal)) { if (doneOn(d)) n++ else return n }
+            if (dueOn(cal)) { if (doneOn(d)) n++ else return n }
             else if (doneOn(d)) n++   // hecho un día que no tocaba: suma
             cal.add(Calendar.DAY_OF_YEAR, -1)
         }
@@ -69,24 +79,80 @@ data class Habit(
             val d = HabitDates.iso(cal)
             when {
                 doneOn(d) -> { run++; best = maxOf(best, run) }
-                scheduledOn(cal) && d != end -> run = 0
+                dueOn(cal) && d != end -> run = 0
             }
             cal.add(Calendar.DAY_OF_YEAR, 1)
         }
         return best
     }
 
-    /** Este mes: días cumplidos / días que tocaban hasta hoy. */
+    /** Este mes: días cumplidos / días que tocaban hasta hoy (sin los días en pausa). */
     fun monthRate(now: Calendar = Calendar.getInstance()): Pair<Int, Int> {
         val cal = (now.clone() as Calendar).apply { set(Calendar.DAY_OF_MONTH, 1) }
         var done = 0; var due = 0
         while (!cal.after(now)) {
             val d = HabitDates.iso(cal)
-            if (scheduledOn(cal)) due++
+            if (dueOn(cal)) due++
             if (doneOn(d)) done++
             cal.add(Calendar.DAY_OF_YEAR, 1)
         }
         return done to due
+    }
+}
+
+/**
+ * Pausa de un hábito, del día [start] al día [end] inclusive (null = sin fecha fija), con motivo opcional
+ * ("viaje", "enfermo", "descanso", "otro"). Se guarda como etiqueta de la tarjeta:
+ * `habit_pause:2026-11-27:2026-12-05:viaje` (sin fin: `habit_pause:2026-11-27::viaje`).
+ */
+data class HabitPause(val start: String, val end: String?, val reason: String? = null) {
+    fun covers(day: String): Boolean = day >= start && (end == null || day <= end)
+
+    fun toLabel(): String = PREFIX + start + ":" + end.orEmpty() + ":" + reason.orEmpty()
+
+    /** "Viaje", "Enfermo"… o null. */
+    val reasonLabel: String? get() = reason?.let { r -> REASONS.firstOrNull { it.first == r }?.second ?: r.replaceFirstChar { it.uppercase() } }
+
+    /** "⏸ En pausa hasta 5 dic · Viaje" / "⏸ En pausa · Viaje". */
+    fun label(today: String = HabitDates.today()): String =
+        "⏸ En pausa" + (end?.let { " hasta " + HabitDates.short(it, today) } ?: "") + (reasonLabel?.let { " · $it" } ?: "")
+
+    companion object {
+        const val PREFIX = "habit_pause:"
+        val REASONS = listOf("viaje" to "Viaje", "enfermo" to "Enfermo", "descanso" to "Descanso", "otro" to "Otro")
+        private val DAY = Regex("\\d{4}-\\d{2}-\\d{2}")
+
+        /** Lee una etiqueta `habit_pause:…`; null si no es de pausa o está mal formada. */
+        fun parse(label: String): HabitPause? {
+            if (!label.startsWith(PREFIX)) return null
+            val parts = label.removePrefix(PREFIX).split(':', limit = 3)
+            val start = parts.getOrNull(0)?.takeIf { DAY.matches(it) } ?: return null
+            val end = parts.getOrNull(1)?.takeIf { it.isNotEmpty() }
+            if (end != null && !DAY.matches(end)) return null
+            val reason = parts.getOrNull(2)?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
+            return HabitPause(start, end, reason)
+        }
+
+        /** Pausa nueva desde [today] hasta [end]: reemplaza la que cubra hoy, conserva el historial. */
+        fun add(pauses: List<HabitPause>, today: String, end: String?, reason: String?): List<HabitPause> =
+            pauses.filterNot { it.covers(today) || it.start > today } +
+                HabitPause(today, end?.let { maxOf(it, today) }, reason?.trim()?.lowercase()?.takeIf { it.isNotEmpty() && ':' !in it })
+
+        /**
+         * Reanudar hoy: la pausa que cubre hoy termina ayer (hoy ya toca). Si empezó hoy, se borra.
+         * Las pausas pasadas quedan para calcular bien las rachas.
+         */
+        fun resume(pauses: List<HabitPause>, today: String): List<HabitPause> {
+            val yesterday = HabitDates.iso(HabitDates.parse(today).apply { add(Calendar.DAY_OF_YEAR, -1) })
+            return pauses.mapNotNull { p ->
+                when {
+                    p.start > today -> null
+                    !p.covers(today) -> p
+                    p.start > yesterday -> null
+                    else -> p.copy(end = yesterday)
+                }
+            }
+        }
     }
 }
 
@@ -116,6 +182,17 @@ object HabitDates {
         else -> listOf(1, 2, 3, 4, 5, 6, 0).filter { it in days }.joinToString(" ") { LETTERS[it] }
     }
     val LETTERS = listOf("D", "L", "M", "X", "J", "V", "S")
+
+    private val MONTHS = listOf("ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic")
+
+    /** "5 dic" (con año si no es el de [today]: "5 dic 2027"). */
+    fun short(day: String, today: String = today()): String {
+        val cal = parse(day)
+        val s = "${cal.get(Calendar.DAY_OF_MONTH)} ${MONTHS[cal.get(Calendar.MONTH)]}"
+        return if (day.take(4) == today.take(4)) s else "$s ${cal.get(Calendar.YEAR)}"
+    }
+
+    fun plusDays(day: String, n: Int): String = iso(parse(day).apply { add(Calendar.DAY_OF_YEAR, n) })
 }
 
 /**
@@ -232,6 +309,27 @@ object Habits {
     }
 
     private fun notifId(id: String) = NOTIF_BASE + (id.hashCode() and 0x3FF)
+
+    /** Pausa el hábito desde hoy hasta [end] (inclusive; null = sin fecha fija). Se ve al instante. */
+    suspend fun pause(ctx: Context, id: String, end: String?, reason: String?): Result<Unit> {
+        val r = setPauses(ctx, id) { HabitPause.add(it, HabitDates.today(), end, reason) }
+        if (r.isSuccess) NotificationManagerCompat.from(ctx).cancel(notifId(id))
+        return r
+    }
+
+    /** Termina la pausa actual: desde hoy vuelve a tocar. */
+    suspend fun resume(ctx: Context, id: String): Result<Unit> =
+        setPauses(ctx, id) { HabitPause.resume(it, HabitDates.today()) }
+
+    private suspend fun setPauses(ctx: Context, id: String, change: (List<HabitPause>) -> List<HabitPause>): Result<Unit> {
+        val before = _habits.value
+        val h = before.firstOrNull { it.id == id } ?: return Result.failure(IllegalStateException("Hábito no encontrado"))
+        val pauses = change(h.pauses)
+        _habits.value = before.map { if (it.id == id) it.copy(pauses = pauses) else it }
+        val r = NeonRepository.setHabitPauses(ctx, id, pauses.map { it.toLabel() })
+        if (r.isFailure) _habits.value = before
+        return r
+    }
 
     @Suppress("unused") private fun now() = Date()
 }
