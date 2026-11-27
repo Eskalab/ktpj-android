@@ -11,7 +11,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.semantics.Role
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -77,55 +87,90 @@ fun NewTaskScreen(
         pomos = pomos.takeIf { it > 0 },
     )
 
-    Column(Modifier.fillMaxSize().background(c.bg).safeDrawingPadding()) {
-        Column(
-            Modifier
-                .weight(1f)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = KtpjDimens.screenPadding, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(KtpjDimens.blockGap),
-        ) {
-            Text("TABLERO SPUR", style = t.overlineLarge, color = c.muted)
-            Text(if (initial == null) "Nueva tarea" else "Editar tarea", style = t.onboardingTitle, color = c.fg)
-            if (initial == null && onSwitchToHabit != null) {
-                androidx.compose.foundation.layout.Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Chip("Tarea", true, {})
-                    Chip("↻ Hábito", false, onSwitchToHabit)
-                }
-            }
+    val scroll = rememberScrollState()
+    val scope = rememberCoroutineScope()
+    val focus = LocalFocusManager.current
+    val saveLabel = if (saving) "Guardando…" else if (initial == null) "Crear tarea" else "Guardar cambios"
 
-            Field("Qué hay que hacer") {
-                TextBox(title, { title = it.take(200) }, "Ej. Llamar al notario", "Título de la tarea", ImeAction.Next)
-            }
-            Field("Detalle (opcional)") {
-                TextBox(description, { description = it.take(500) }, "Ej. Preguntar por la escritura", "Detalle de la tarea", ImeAction.Done)
-            }
-            Field("Fecha") {
-                DueChips(due, { due = it })
-            }
-            Field("Épica (opcional)") { EpicField(projects, projectId, { projectId = it }, onCreateProject, initial?.project) }
-            Field("Pomodoros estimados") { PomosField(pomos, { pomos = it }) }
-            initial?.let { co.eskala.bktpj_notification.ui.components.PomoSessionsList(it.id, todayOnly = false) }
-            Field("App (opcional)") {
-                AppField(app, { app = it })
-            }
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Chip("★ Prioritaria", priority, { priority = !priority })
-                Text(
-                    if (priority) "El día de su fecha (o si se atrasa) te la recuerdo cada hora, de 6:00 a.m. a 8:00 p.m., hasta que la marques como Hecha."
-                    else "Sin estrella solo aparece en la lista, sin recordatorios.",
-                    style = t.caption,
-                    color = c.muted,
-                )
+    // KTP-11 opción A: el botón grande va al final del formulario y se desplaza con él, para que
+    // fecha, ★, épica, pomodoros y app siempre queden a la vista antes de crear.
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(c.bg)
+            .safeDrawingPadding()
+            .verticalScroll(scroll)
+            .padding(horizontal = KtpjDimens.screenPadding, vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(KtpjDimens.blockGap),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("TABLERO SPUR", style = t.overlineLarge, color = c.muted, modifier = Modifier.weight(1f))
+            // Atajo compacto arriba: solo aparece con título, no tapa nada y evita bajar hasta el final.
+            if (canSave) QuickSave(if (initial == null) "Crear" else "Guardar") { onSave(build()) }
+        }
+        Text(if (initial == null) "Nueva tarea" else "Editar tarea", style = t.onboardingTitle, color = c.fg)
+        if (initial == null && onSwitchToHabit != null) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Chip("Tarea", true, {})
+                Chip("↻ Hábito", false, onSwitchToHabit)
             }
         }
+
+        Field("Qué hay que hacer") {
+            TextBox(title, { title = it.take(200) }, "Ej. Llamar al notario", "Título de la tarea", ImeAction.Next)
+        }
+        Field("Detalle (opcional)") {
+            // "Listo" cierra el teclado y baja hasta el botón pasando por las opciones.
+            TextBox(description, { description = it.take(500) }, "Ej. Preguntar por la escritura", "Detalle de la tarea", ImeAction.Done) {
+                focus.clearFocus()
+                scope.launch { scroll.animateScrollTo(scroll.maxValue) }
+            }
+        }
+        Field("Fecha") {
+            DueChips(due, { due = it })
+        }
+        Field("Épica (opcional)") { EpicField(projects, projectId, { projectId = it }, onCreateProject, initial?.project) }
+        Field("Pomodoros estimados") { PomosField(pomos, { pomos = it }) }
+        initial?.let { co.eskala.bktpj_notification.ui.components.PomoSessionsList(it.id, todayOnly = false) }
+        Field("App (opcional)") {
+            AppField(app, { app = it })
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Chip("★ Prioritaria", priority, { priority = !priority })
+            Text(
+                if (priority) "El día de su fecha (o si se atrasa) te la recuerdo cada hora, de 6:00 a.m. a 8:00 p.m., hasta que la marques como Hecha."
+                else "Sin estrella solo aparece en la lista, sin recordatorios.",
+                style = t.caption,
+                color = c.muted,
+            )
+        }
         Column(
-            Modifier.padding(start = KtpjDimens.screenPadding, end = KtpjDimens.screenPadding, top = 14.dp, bottom = 22.dp),
+            Modifier.padding(top = 4.dp, bottom = 6.dp),
             verticalArrangement = Arrangement.spacedBy(KtpjDimens.cardGapSmall),
         ) {
-            PrimaryButton(if (saving) "Guardando…" else if (initial == null) "Crear tarea" else "Guardar cambios", onClick = { onSave(build()) }, enabled = canSave)
+            PrimaryButton(saveLabel, onClick = { onSave(build()) }, enabled = canSave)
+            if (!canSave && !saving) {
+                Text("Escribe qué hay que hacer para poder crearla.", style = t.caption, color = c.muted, modifier = Modifier.fillMaxWidth())
+            }
             SecondaryButton("Cancelar", onClick = onCancel, enabled = !saving)
         }
+    }
+}
+
+/** Botón compacto de guardar en la cabecera (opción A): pill con borde, mínimo 44dp de alto. */
+@Composable
+private fun QuickSave(text: String, onClick: () -> Unit) {
+    val c = KtpjTheme.colors
+    Box(
+        Modifier
+            .heightIn(min = KtpjDimens.minTouchTarget)
+            .clip(KtpjShapes.pill)
+            .border(KtpjDimens.borderCard, c.fg, KtpjShapes.pill)
+            .clickable(role = Role.Button, onClickLabel = "Guardar la tarea") { onClick() }
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text("✓ $text", style = KtpjTheme.type.captionStrong, color = c.fg)
     }
 }
 
@@ -138,7 +183,7 @@ private fun Field(label: String, content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun TextBox(value: String, onChange: (String) -> Unit, placeholder: String, description: String, ime: ImeAction) {
+private fun TextBox(value: String, onChange: (String) -> Unit, placeholder: String, description: String, ime: ImeAction, onDone: (() -> Unit)? = null) {
     val c = KtpjTheme.colors
     val t = KtpjTheme.type
     BasicTextField(
@@ -147,6 +192,7 @@ private fun TextBox(value: String, onChange: (String) -> Unit, placeholder: Stri
         textStyle = t.body.copy(color = c.fg),
         cursorBrush = SolidColor(c.fg),
         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ime),
+        keyboardActions = if (onDone != null) KeyboardActions(onDone = { onDone() }) else KeyboardActions.Default,
         modifier = Modifier.fillMaxWidth().semantics { contentDescription = description },
         decorationBox = { inner ->
             Box(
@@ -166,4 +212,10 @@ private fun TextBox(value: String, onChange: (String) -> Unit, placeholder: Stri
 @Composable
 private fun NewTaskPreview() = KtpjTheme(ThemeMode.LIGHT) {
     NewTaskScreen(saving = false, onSave = {}, onCancel = {})
+}
+
+@Preview(name = "Nueva tarea — Oscuro, fuente grande", widthDp = 360, heightDp = 760, fontScale = 1.6f)
+@Composable
+private fun NewTaskDarkPreview() = KtpjTheme(ThemeMode.DARK) {
+    NewTaskScreen(saving = false, onSave = {}, onCancel = {}, initialDue = null)
 }
