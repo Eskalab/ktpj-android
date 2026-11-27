@@ -43,6 +43,7 @@ import kotlinx.coroutines.launch
 /**
  * Fila de hábito: círculo para marcar hoy, título (tachado al cumplir), meta y racha 🔥.
  * Si tiene meta con unidad, al marcar pregunta cuánto hiciste (con la meta ya puesta).
+ * En pausa sale tenue con "⏸ En pausa hasta …" y sin ▶ Empezar (marcar sigue permitido).
  */
 @Composable
 fun HabitRow(habit: Habit, onOpen: () -> Unit, onStart: (() -> Unit)? = null) {
@@ -53,6 +54,7 @@ fun HabitRow(habit: Habit, onOpen: () -> Unit, onStart: (() -> Unit)? = null) {
     var asking by remember { mutableStateOf(false) }
     val done = habit.doneToday
     val due = habit.dueToday
+    val pause = habit.currentPause
     val streak = habit.streak()
 
     fun check(amount: Int?) = scope.launch {
@@ -84,7 +86,7 @@ fun HabitRow(habit: Habit, onOpen: () -> Unit, onStart: (() -> Unit)? = null) {
                 .size(KtpjDimens.minTouchTarget)
                 .clip(KtpjShapes.pill)
                 .clickable(role = Role.Checkbox, onClickLabel = if (done) "Desmarcar hoy" else "Marcar hoy", onClick = ::toggle)
-                .semantics { stateDescription = if (done) "Hecho hoy" else "Pendiente hoy" },
+                .semantics { stateDescription = if (done) "Hecho hoy" else if (pause != null) "En pausa" else "Pendiente hoy" },
             contentAlignment = Alignment.Center,
         ) {
             Box(
@@ -111,13 +113,17 @@ fun HabitRow(habit: Habit, onOpen: () -> Unit, onStart: (() -> Unit)? = null) {
                     done && todayAmount != null && habit.unit != null -> "$todayAmount ${habit.unit} hoy"
                     else -> habit.goalLabel
                 },
-                if (!due && !done) "hoy no toca" else null,
+                when {
+                    pause != null -> pause.label()
+                    !due && !done -> "hoy no toca"
+                    else -> null
+                },
                 if (streak > 0) "🔥 $streak" else null,
             ).joinToString(" · ")
             Row(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
                 if (meta.isNotEmpty()) Text(meta, style = t.captionStrong, color = c.muted)
                 // Pomodoro: solo si toca hoy y aún no está hecho
-                if (onStart != null && !done) {
+                if (onStart != null && !done && pause == null) {
                     val running = co.eskala.bktpj_notification.Pomodoro.state.collectAsState().value?.taskId == habit.id
                     Text(
                         if (running) "● En curso" else "▶ Empezar",

@@ -555,6 +555,7 @@ object NeonRepository {
                     unit = label("habit_unit:"),
                     remindAt = label("habit_at:")?.toIntOrNull(),
                     app = label("app:"),
+                    pauses = labels.mapNotNull { HabitPause.parse(it) },
                     project = row.str("project_id")?.let {
                         TaskProject(it, row.str("project").orEmpty(), row.str("project_color"), row.str("project_prefix"),
                             paused = row.optBoolean("project_paused", false))
@@ -586,10 +587,20 @@ object NeonRepository {
         sql(
             ctx,
             """UPDATE cards SET title = $2,
-                      labels = ARRAY(SELECT l FROM unnest(labels) l WHERE l NOT LIKE 'habit\_%' AND l NOT LIKE 'app:%') || $3::text[],
+                      labels = ARRAY(SELECT l FROM unnest(labels) l
+                                     WHERE (l NOT LIKE 'habit\_%' OR l LIKE 'habit\_pause:%') AND l NOT LIKE 'app:%') || $3::text[],
                       recurrence_days = $4::int[], project_id = $5
                WHERE id = $1 AND source_type = 'spur'""",
             listOf(id, h.title, habitLabels(h.goal, h.unit, h.remindAt, h.app), intArray(h.days), h.projectId),
+        ).map { }
+
+    /** Reemplaza las etiquetas `habit_pause:…` del hábito (historial de pausas) por [labels]. */
+    suspend fun setHabitPauses(ctx: Context, id: String, labels: List<String>): Result<Unit> =
+        sql(
+            ctx,
+            """UPDATE cards SET labels = ARRAY(SELECT l FROM unnest(labels) l WHERE l NOT LIKE 'habit\_pause:%') || $2::text[]
+               WHERE id = $1 AND source_type = 'spur'""",
+            listOf(id, labels.joinToString(",", "{", "}") { "\"" + it.replace("\\", "").replace("\"", "") + "\"" }),
         ).map { }
 
     /** Marca el día (o cambia la cantidad si ya estaba). */
