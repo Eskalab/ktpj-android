@@ -98,13 +98,48 @@ object SpurTasks {
     }
 
     suspend fun refreshDoneToday(ctx: Context) {
-        NeonRepository.fetchTasksDoneSince(ctx, startOfTodayUtc()).getOrNull()?.let { _doneToday.value = it }
+        NeonRepository.fetchTasksDoneSince(ctx, startOfTodayUtc()).getOrNull()?.let {
+            OfflineCache.saveDoneToday(ctx, it)
+            show(ctx, _tasks.value, it)
+        }
+    }
+
+    // ── KTP-8: sin conexión. Los cambios van a la cola (Outbox) y se ven al instante; la cola los sube. ──
+
+    @Volatile private var restored = false
+
+    /** Épica para mostrar una tarea creada o movida sin red. */
+    private fun projectOf(ctx: Context, id: String): TaskProject? =
+        (_tasks.value + _doneToday.value).firstNotNullOfOrNull { t -> t.project?.takeIf { it.id == id } }
+            ?: OfflineCache.project(ctx, id)
+
+    /** Muestra [tasks]/[done] con los cambios aún sin subir aplicados encima. */
+    private fun show(ctx: Context, tasks: List<SpurTask>, done: List<SpurTask>, ops: List<OutboxOp> = Outbox.pendingOps(ctx)) {
+        val (t, d) = OutboxPolicy.applyToTasks(tasks, done, ops) { projectOf(ctx, it) }
+        _tasks.value = t
+        _doneToday.value = d
+    }
+
+    /** Abre con lo último guardado si todavía no se ha leído nada de la base. */
+    fun restoreCache(ctx: Context) {
+        if (restored) return
+        restored = true
+        if (_tasks.value.isEmpty() && _doneToday.value.isEmpty()) {
+            show(ctx, OfflineCache.get(ctx).tasks.orEmpty(), OfflineCache.doneToday(ctx).orEmpty())
+        }
+        Habits.restoreCache(ctx)
+    }
+
+    /** Encola el cambio, lo aplica en pantalla y trata de subirlo ya. */
+    private fun local(ctx: Context, op: OutboxOp) {
+        Outbox.enqueue(ctx, op)
+        show(ctx, _tasks.value, _doneToday.value, listOf(op))
+        OfflineSync.kick(ctx)
     }
 
     suspend fun setDue(ctx: Context, id: String, due: String?): Result<Unit> {
-        val r = NeonRepository.setTaskDue(ctx, id, due)
-        if (r.isSuccess) _tasks.value = _tasks.value.map { if (it.id == id) it.copy(due = due) else it }
-        return r
+        local(ctx, OutboxOp.SetDue(id, due))
+        return Result.success(Unit)
     }
 
     /** Revisión periódica (15 min es el mínimo de Android) con red disponible. */
@@ -117,10 +152,14 @@ object SpurTasks {
     }
 
     suspend fun sync(ctx: Context): Result<List<SpurTask>> {
+        restoreCache(ctx)
+        OfflineSync.flush(ctx)   // primero sube lo pendiente; así la lectura ya lo trae
         val r = NeonRepository.fetchClaudeTasks(ctx)
         if (r.isSuccess) Habits.sync(ctx)   // aparte: si falla (falta la migración), las tareas siguen
+        OfflineSync.readFailed.value = OfflineSync.isNetworkError(r.exceptionOrNull())
         r.getOrNull()?.let { list ->
-            _tasks.value = list
+            OfflineCache.saveTasks(ctx, list)
+            show(ctx, list, _doneToday.value)
             refreshDoneToday(ctx)
             val sp = ctx.getSharedPreferences(SEEN_FILE, Context.MODE_PRIVATE)
             val seen = sp.getStringSet(SEEN_KEY, emptySet()).orEmpty()
@@ -150,15 +189,10 @@ object SpurTasks {
     }
 
     suspend fun markDone(ctx: Context, id: String): Result<Unit> {
-        val r = NeonRepository.markTaskDone(ctx, id)
-        if (r.isSuccess) {
-            val done = _tasks.value.firstOrNull { it.id == id }
-            _tasks.value = _tasks.value.filterNot { it.id == id }
-            // Aparece tachada de inmediato; la próxima lectura de la base la confirma.
-            if (done != null) _doneToday.value = listOf(done) + _doneToday.value.filterNot { it.id == id }
-            SpurNotifications.cancelTask(ctx, id)
-        }
-        return r
+        // Aparece tachada de inmediato; la cola la sube y la próxima lectura de la base la confirma.
+        local(ctx, OutboxOp.CompleteTask(id, at = System.currentTimeMillis()))
+        SpurNotifications.cancelTask(ctx, id)
+        return Result.success(Unit)
     }
 
     /**
@@ -166,50 +200,38 @@ object SpurTasks {
      * acaba de escribir; si es prioritaria, el primer recordatorio llega en una hora.
      */
     suspend fun create(ctx: Context, title: String, description: String?, due: String?, high: Boolean, app: String? = null, projectId: String? = null, pomos: Int? = null): Result<String> {
-        val r = NeonRepository.insertTask(ctx, title, description, due, high, app, projectId, pomos)
-        r.getOrNull()?.let { id ->
-            val sp = ctx.getSharedPreferences(SEEN_FILE, Context.MODE_PRIVATE)
-            val seen = sp.getStringSet(SEEN_KEY, emptySet()).orEmpty()
-            sp.edit()
-                .putStringSet(SEEN_KEY, seen + id)
-                .putLong(REMIND_PREFIX + id, System.currentTimeMillis())
-                .apply()
-            sync(ctx)
-        }
-        return r
+        // El id (UUID) se genera aquí y es el mismo que tendrá la tarjeta: el reenvío no duplica.
+        val id = java.util.UUID.randomUUID().toString()
+        val sp = ctx.getSharedPreferences(SEEN_FILE, Context.MODE_PRIVATE)
+        val seen = sp.getStringSet(SEEN_KEY, emptySet()).orEmpty()
+        sp.edit()
+            .putStringSet(SEEN_KEY, seen + id)
+            .putLong(REMIND_PREFIX + id, System.currentTimeMillis())
+            .apply()
+        local(ctx, OutboxOp.CreateTask(id, title, description, due, high, app, projectId, pomos))
+        return Result.success(id)
     }
 
     /** Marca o quita la ★. El primer recordatorio llega una hora después de marcarla. */
     suspend fun setPriority(ctx: Context, id: String, high: Boolean): Result<Unit> {
-        val r = NeonRepository.setTaskPriority(ctx, id, high)
-        if (r.isSuccess) {
-            _tasks.value = _tasks.value
-                .map { if (it.id == id) it.copy(priority = high) else it }
-                .sortedByDescending { it.priority }
-            ctx.getSharedPreferences(SEEN_FILE, Context.MODE_PRIVATE).edit()
-                .putLong(REMIND_PREFIX + id, System.currentTimeMillis()).apply()
-        }
-        return r
+        local(ctx, OutboxOp.SetPriority(id, high))
+        ctx.getSharedPreferences(SEEN_FILE, Context.MODE_PRIVATE).edit()
+            .putLong(REMIND_PREFIX + id, System.currentTimeMillis()).apply()
+        return Result.success(Unit)
     }
 
     /** Guarda la edición. Si se acaba de marcar ★, el primer recordatorio llega en una hora. */
     suspend fun update(ctx: Context, id: String, title: String, description: String?, due: String?, high: Boolean, app: String?, project: TaskProject?, pomos: Int? = null): Result<Unit> {
         val before = _tasks.value.firstOrNull { it.id == id }
-        val r = NeonRepository.updateTask(ctx, id, title, description, due, high, app, project?.id, pomos)
-        if (r.isSuccess) {
-            // Cambió de épica: nuevo ID con el prefijo de la nueva (SP-7 → LAV-4), como en Jira.
-            val newKey = if (before != null && before.project?.id != project?.id) {
-                NeonRepository.assignKey(ctx, id, project?.id).getOrNull() ?: before.key
-            } else before?.key
-            _tasks.value = _tasks.value
-                .map { if (it.id == id) it.copy(title = title, description = description, due = due, priority = high, app = app, project = project, key = newKey, pomos = pomos) else it }
-                .sortedByDescending { it.priority }
-            if (high && before?.priority != true) {
-                ctx.getSharedPreferences(SEEN_FILE, Context.MODE_PRIVATE).edit()
-                    .putLong(REMIND_PREFIX + id, System.currentTimeMillis()).apply()
-            }
+        // Cambió de épica: nuevo ID con el prefijo de la nueva (SP-7 → LAV-4), como en Jira; llega al sincronizar.
+        val rekey = before != null && before.project?.id != project?.id
+        local(ctx, OutboxOp.UpdateTask(id, title, description, due, high, app, project?.id, pomos, rekey))
+        if (project != null) _tasks.value = _tasks.value.map { if (it.id == id) it.copy(project = project) else it }
+        if (high && before?.priority != true) {
+            ctx.getSharedPreferences(SEEN_FILE, Context.MODE_PRIVATE).edit()
+                .putLong(REMIND_PREFIX + id, System.currentTimeMillis()).apply()
         }
-        return r
+        return Result.success(Unit)
     }
 
     /** Pausa o reanuda una épica. Al reanudar, [shiftDays] corre las fechas de sus pendientes. */
@@ -222,9 +244,8 @@ object SpurTasks {
 
     /** Empezar (en curso) o volver a pendiente. */
     suspend fun setStarted(ctx: Context, id: String, started: Boolean): Result<Unit> {
-        val r = NeonRepository.setTaskStarted(ctx, id, started)
-        if (r.isSuccess) _tasks.value = _tasks.value.map { if (it.id == id) it.copy(started = started) else it }
-        return r
+        local(ctx, OutboxOp.SetStarted(id, started))
+        return Result.success(Unit)
     }
 
     class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {

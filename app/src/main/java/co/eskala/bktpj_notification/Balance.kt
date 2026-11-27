@@ -58,7 +58,7 @@ data class Balance(
     val left: Double get() = income - variable - fixed
 
     companion object {
-        fun counted(c: Capture) = c.status == CaptureStatus.OK && c.tx.recordTransaction && Money.parse(c.tx.amount) != null
+        fun counted(c: Capture) = (c.status == CaptureStatus.OK || c.pendingUpload) && c.tx.recordTransaction && Money.parse(c.tx.amount) != null
         fun isIncome(c: Capture) = c.tx.type == "abono"
 
         /** Lo que de verdad "gastaste": cargos no fijos. Es la cifra del día en Inicio y en Gastos. */

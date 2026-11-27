@@ -120,6 +120,10 @@ fun SettingsScreen(
             }
         }
 
+        SectionCard("UBICACIÓN") {
+            LocationSettingRow()
+        }
+
         SectionCard("POMODORO") {
             val ctx = androidx.compose.ui.platform.LocalContext.current
             co.eskala.bktpj_notification.ui.components.PomodoroSettings { co.eskala.bktpj_notification.Pomodoro.setConfig(ctx, it) }
