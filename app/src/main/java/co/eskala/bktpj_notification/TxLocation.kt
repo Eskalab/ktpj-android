@@ -151,3 +151,40 @@ object AddressFormat {
         return parts.joinToString(", ")
     }
 }
+
+/**
+ * Cuánto puede esperar una captura por la ubicación, según si la app está en pantalla y si hay
+ * permiso de segundo plano. La ubicación nunca debe poner en riesgo el guardado: un SMS corre en
+ * goAsync() (~10 s en total para la red), y el gasto manual debe sentirse inmediato.
+ */
+data class LocationBudget(
+    /** Tope de todo (fix + dirección). */
+    val totalMs: Long,
+    /** Espera por un fix nuevo; 0 = solo el último conocido. */
+    val freshMs: Long,
+    /** Espera por la dirección (Geocoder). */
+    val geocodeMs: Long,
+) {
+    val allowFresh: Boolean get() = freshMs > 0
+
+    /** Lo que le queda a la dirección tras [elapsedMs] buscando el fix (nunca pasa del total). */
+    fun geocodeTimeout(elapsedMs: Long): Long = minOf(geocodeMs, totalMs - elapsedMs).coerceAtLeast(0)
+
+    companion object {
+        /** Gasto manual / atajo con la app en pantalla: rápido, para que "Tarjeta creada" no se demore. */
+        val FOREGROUND = LocationBudget(totalMs = 3_000, freshMs = 2_000, geocodeMs = 1_000)
+        /** Nu / Davivienda con la app cerrada y "Permitir todo el tiempo": corto, el SMS no puede esperar. */
+        val BACKGROUND = LocationBudget(totalMs = 2_000, freshMs = 1_200, geocodeMs = 700)
+        /** Con la app cerrada y sin permiso de segundo plano un fix nuevo no puede llegar: solo último conocido. */
+        val LAST_KNOWN_ONLY = LocationBudget(totalMs = 1_000, freshMs = 0, geocodeMs = 700)
+
+        /** null = no buscar ubicación (apagado o sin permiso). */
+        fun plan(enabled: Boolean, foregroundPermission: Boolean, backgroundPermission: Boolean, inForeground: Boolean): LocationBudget? =
+            when {
+                !enabled || !foregroundPermission -> null
+                inForeground -> FOREGROUND
+                backgroundPermission -> BACKGROUND
+                else -> LAST_KNOWN_ONLY
+            }
+    }
+}

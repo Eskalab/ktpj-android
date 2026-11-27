@@ -2,6 +2,7 @@ package co.eskala.bktpj_notification
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.ActivityManager
 import android.content.Context
 import android.content.pm.PackageManager
 import android.location.Geocoder
@@ -25,15 +26,12 @@ import kotlin.coroutines.resume
 
 /**
  * Ubicación del teléfono al capturar una transacción (KTP-7), con el LocationManager de la plataforma
- * (sin Google Play Services). Nunca lanza ni demora el guardado más de [TOTAL_TIMEOUT_MS]:
+ * (sin Google Play Services). Nunca lanza ni demora el guardado más que [LocationBudget] (≤ 3 s):
  * apagado o sin permiso → null y todo sigue como antes.
  * Solo se usa para transacciones; no hay seguimiento ni se pide en ningún otro momento.
  */
 object TxLocator {
 
-    private const val FRESH_TIMEOUT_MS = 4_000L
-    private const val GEOCODE_TIMEOUT_MS = 2_500L
-    private const val TOTAL_TIMEOUT_MS = 7_000L
     /** Un SMS con varios movimientos (o dos capturas seguidas) reutiliza la misma ubicación. */
     private const val REUSE_MS = 60_000L
 
@@ -65,26 +63,42 @@ object TxLocator {
 
     /** Ubicación para una captura que se está guardando ahora, o null. */
     suspend fun capture(ctx: Context): TxLocation? {
-        if (!isEnabled(ctx) || !hasForegroundPermission(ctx)) return null
+        val budget = runCatching {
+            LocationBudget.plan(
+                enabled = isEnabled(ctx),
+                foregroundPermission = hasForegroundPermission(ctx),
+                backgroundPermission = hasBackgroundPermission(ctx),
+                inForeground = isAppInForeground(),
+            )
+        }.getOrNull() ?: return null
         recent?.let { (at, loc) -> if (SystemClock.elapsedRealtime() - at < REUSE_MS) return loc }
         val loc = runCatching {
-            withTimeoutOrNull(TOTAL_TIMEOUT_MS) { locate(ctx.applicationContext) }
+            // Margen: locate() ya reparte el presupuesto; esto solo corta si algo se cuelga.
+            withTimeoutOrNull(budget.totalMs + 300) { locate(ctx.applicationContext, budget) }
         }.getOrNull()
         if (loc != null) recent = SystemClock.elapsedRealtime() to loc
         return loc
     }
 
-    private suspend fun locate(ctx: Context): TxLocation? {
+    /** ¿Hay una pantalla de la app visible? (Android solo da fixes nuevos en segundo plano con ACCESS_BACKGROUND_LOCATION.) */
+    private fun isAppInForeground(): Boolean {
+        val info = ActivityManager.RunningAppProcessInfo()
+        ActivityManager.getMyMemoryState(info)
+        return info.importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
+    }
+
+    private suspend fun locate(ctx: Context, budget: LocationBudget): TxLocation? {
+        val start = SystemClock.elapsedRealtime()
         val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return null
         if (!LocationManagerCompat.isLocationEnabled(lm)) return null
 
         val lastKnown = withContext(Dispatchers.IO) { LocationPick.best(lastKnownFixes(lm)) }
-        val fix = if (LocationPick.freshEnough(lastKnown)) lastKnown else {
-            val fresh = withTimeoutOrNull(FRESH_TIMEOUT_MS) { currentFix(lm) }
+        val fix = if (!budget.allowFresh || LocationPick.freshEnough(lastKnown)) lastKnown else {
+            val fresh = withTimeoutOrNull(budget.freshMs) { currentFix(lm) }
             LocationPick.choose(fresh, lastKnown)
         } ?: return null
 
-        val address = geocode(ctx, fix.lat, fix.lng)
+        val address = geocode(ctx, fix.lat, fix.lng, budget.geocodeTimeout(SystemClock.elapsedRealtime() - start))
         return TxLocation(
             lat = fix.lat,
             lng = fix.lng,
@@ -135,11 +149,11 @@ object TxLocator {
     )
 
     /**
-     * Dirección corta, a lo sumo [GEOCODE_TIMEOUT_MS]. Geocoder bloquea (y necesita red), así que corre
+     * Dirección corta, a lo sumo [timeoutMs]. Geocoder bloquea (y necesita red), así que corre
      * aparte en IO; si tarda, se deja seguir y se guarda sin dirección.
      */
-    private suspend fun geocode(ctx: Context, lat: Double, lng: Double): String? {
-        if (!Geocoder.isPresent()) return null
+    private suspend fun geocode(ctx: Context, lat: Double, lng: Double, timeoutMs: Long): String? {
+        if (timeoutMs <= 0 || !Geocoder.isPresent()) return null
         val job = geoScope.async {
             runCatching {
                 @Suppress("DEPRECATION")
@@ -155,6 +169,6 @@ object TxLocator {
                 )
             }.getOrNull()
         }
-        return withTimeoutOrNull(GEOCODE_TIMEOUT_MS) { job.await() }
+        return withTimeoutOrNull(timeoutMs) { job.await() }
     }
 }
