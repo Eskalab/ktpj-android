@@ -56,6 +56,7 @@ fun TaskRow(
     onEdit: (() -> Unit)? = null,
     onToggleStarted: (() -> Unit)? = null,
     onOpenEpic: ((TaskProject) -> Unit)? = null,
+    footer: (@Composable () -> Unit)? = null,   // acciones extra al pie (KTP-13: reprogramar atrasadas)
 ) {
     val c = KtpjTheme.colors
     val t = KtpjTheme.type
@@ -150,6 +151,7 @@ fun TaskRow(
                 } else ProjectTag(p, secondary)
             }
             task.app?.let { AppLink(it, enabled = !busy) }
+            footer?.invoke()
         }
         if (onTogglePriority != null) {
             Box(
