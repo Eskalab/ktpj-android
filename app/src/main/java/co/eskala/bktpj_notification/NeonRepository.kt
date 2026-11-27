@@ -49,9 +49,10 @@ object NeonRepository {
                 if (resp.isSuccessful) Result.success(JSONObject(respBody))
                 else Result.failure(Exception(neonError(resp.code, respBody)))
             } catch (e: SocketTimeoutException) {
-                Result.failure(Exception("Timeout al conectar con Neon"))
+                Result.failure(Exception("Timeout al conectar con Neon", e))
             } catch (e: Throwable) {
-                Result.failure(Exception(e.message ?: e.toString()))
+                // La causa se conserva: OfflineSync distingue "sin red" (IOException) de un error de la base.
+                Result.failure(Exception(e.message ?: e.toString(), e))
             }
         }
 
@@ -129,6 +130,8 @@ object NeonRepository {
         columnId: String,
         source: CaptureSource = CaptureSource.NU,
         withTransaction: Boolean = true,
+        location: TxLocation? = null,
+        occurredAt: Long? = null,   // KTP-8: hora real de la captura (ms); sin red puede subir mucho después
     ): Result<String> {
         val cardId = UUID.randomUUID().toString()
         val txId   = UUID.randomUUID().toString()
@@ -157,10 +160,12 @@ object NeonRepository {
         val txQuery = """
             INSERT INTO transactions (
                 id, message_id, account, bank, amount, currency,
-                merchant, last4, occurred_at, received_at, status, raw_snippet, created_at
+                merchant, last4, occurred_at, received_at, status, raw_snippet, created_at,
+                location_lat, location_lng, location_address
             ) VALUES (
                 $1, $2, $6, $7, $3, 'COP',
-                $4, $8, NOW(), NOW(), 'UNREVIEWED', $5, NOW()
+                $4, $8, COALESCE(to_timestamp($12::bigint / 1000.0) AT TIME ZONE 'UTC', NOW()), NOW(), 'UNREVIEWED', $5, NOW(),
+                $9::double precision, $10::double precision, $11::text
             )
             ON CONFLICT (message_id) DO NOTHING
         """.trimIndent()
@@ -184,7 +189,7 @@ object NeonRepository {
         val card = sql(ctx, cardQuery, listOf(columnId, cardId, tx.title, tx.rawText, srcId, sourceFrom, sourceType))
         if (card.isFailure) return Result.failure(card.exceptionOrNull()!!)
         if (withTransaction && tx.recordTransaction) {
-            sql(ctx, txQuery, listOf(txId, srcId, amount, tx.merchant ?: account, tx.rawText, account, bank, tx.last4))
+            sql(ctx, txQuery, listOf(txId, srcId, amount, tx.merchant ?: account, tx.rawText, account, bank, tx.last4) + TxLocation.sqlParams(location) + listOf(occurredAt?.toString()))
         }
 
         return Result.success(cardId)
@@ -277,8 +282,8 @@ object NeonRepository {
         app: String? = null,
         projectId: String? = null,
         pomos: Int? = null,
+        id: String = UUID.randomUUID().toString(),   // KTP-8: la cola sin conexión manda su propio id (reintento sin duplicar)
     ): Result<String> {
-        val id = UUID.randomUUID().toString()
         return sql(
             ctx,
             """WITH next_ord AS (SELECT COALESCE(MAX("order"), -1) + 1 AS n FROM cards WHERE column_id = 'spur_col_todo')
@@ -288,31 +293,42 @@ object NeonRepository {
                SELECT $1, $2, $3, n, $4::"Priority",
                       array_remove(ARRAY['app:' || $7::text, 'pomos:' || $9::text], NULL), 'spur_col_todo', $5, 'spur_app', 'spur', $6::timestamp,
                       'NONE', '{}', false, false, false, NOW(), $8
-               FROM next_ord""",
+               FROM next_ord
+               -- KTP-8: reenvío de la cola (mismo id). Gana la última versión de la creación; done y el resto no se tocan.
+               ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, description = EXCLUDED.description,
+                      due_date = EXCLUDED.due_date, priority = EXCLUDED.priority, project_id = EXCLUDED.project_id,
+                      labels = ARRAY(SELECT l FROM unnest(cards.labels) l WHERE l NOT LIKE 'app:%' AND l NOT LIKE 'pomos:%')
+                               || EXCLUDED.labels""",
             listOf(id, title, description, if (high) "HIGH" else "MEDIUM", "spur_$id", due, app, projectId, pomos?.toString()),
-        ).mapCatching { assignKey(ctx, id, projectId).getOrThrow(); id }
+        ).mapCatching { assignKey(ctx, id, projectId, onlyIfMissing = true).getOrThrow(); id }
     }
 
     /**
      * Da a la tarjeta su ID tipo Jira: siguiente número de la épica (LAV-4) o, sin épica o si la épica
      * no tiene prefijo, del tablero Spur (SP-12). Los números no se reutilizan (contadores en la base).
      */
-    suspend fun assignKey(ctx: Context, cardId: String, projectId: String?): Result<String?> =
+    suspend fun assignKey(ctx: Context, cardId: String, projectId: String?, onlyIfMissing: Boolean = false): Result<String?> =
         sql(
             ctx,
-            """WITH pr AS (
+            // onlyIfMissing (KTP-8): si la tarjeta ya tiene ID (reintento de una creación) no se gasta otro número
+            // y la épica no cambió (su ID ya lleva el prefijo de la épica, o la épica no tiene prefijo).
+            """WITH skip AS (
+                 SELECT 1 FROM cards c LEFT JOIN projects p ON p.id = $2
+                 WHERE c.id = $1 AND c.key IS NOT NULL AND $3::boolean
+                   AND (p.prefix IS NULL OR c.key LIKE p.prefix || '-%')
+               ), pr AS (
                  UPDATE projects SET key_seq = key_seq + 1
-                 WHERE id = $2 AND prefix IS NOT NULL
+                 WHERE id = $2 AND prefix IS NOT NULL AND NOT EXISTS (SELECT 1 FROM skip)
                  RETURNING prefix || '-' || key_seq AS k
                ), bd AS (
                  UPDATE boards SET card_count = card_count + 1
-                 WHERE id = 'spur_board' AND NOT EXISTS (SELECT 1 FROM pr)
+                 WHERE id = 'spur_board' AND NOT EXISTS (SELECT 1 FROM pr) AND NOT EXISTS (SELECT 1 FROM skip)
                  RETURNING COALESCE(NULLIF(prefix, ''), 'SP') || '-' || card_count AS k
                )
-               UPDATE cards SET key = COALESCE((SELECT k FROM pr), (SELECT k FROM bd))
+               UPDATE cards SET key = COALESCE((SELECT k FROM pr), (SELECT k FROM bd), key)
                WHERE id = $1
                RETURNING key""",
-            listOf(cardId, projectId),
+            listOf(cardId, projectId, onlyIfMissing),
         ).map { obj -> obj.getJSONArray("rows").optJSONObject(0)?.str("key") }
 
     /** En curso (true) o de vuelta a pendiente (false). */
@@ -485,8 +501,19 @@ object NeonRepository {
         }
     }
 
-    suspend fun markTaskDone(ctx: Context, id: String): Result<Unit> =
-        sql(ctx, "UPDATE cards SET done = true WHERE id = $1 AND source_type IN ('claude', 'spur')", listOf(id)).map { }
+    /**
+     * [at] (ms) = cuándo se marcó en el celular (KTP-8: puede subir horas después). El trigger de done_at
+     * respeta un valor explícito (COALESCE(NEW.done_at, NOW())); si ya estaba hecha no se toca.
+     */
+    suspend fun markTaskDone(ctx: Context, id: String, at: Long? = null): Result<Unit> =
+        sql(
+            ctx,
+            """UPDATE cards SET done = true,
+                      done_at = CASE WHEN done THEN done_at
+                                     ELSE COALESCE(to_timestamp($2::bigint / 1000.0) AT TIME ZONE 'UTC', done_at) END
+               WHERE id = $1 AND source_type IN ('claude', 'spur')""",
+            listOf(id, at?.toString()),
+        ).map { }
 
     // ── Hábitos ── tarjeta de Spur con recurrence DAILY (días en recurrence_days, 0 = domingo) que nunca
     // se marca hecha; cada día cumplido es una fila en habit_checks. Meta y aviso en etiquetas.
