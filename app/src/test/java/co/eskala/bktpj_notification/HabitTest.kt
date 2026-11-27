@@ -40,4 +40,28 @@ class HabitTest {
         assertEquals("Entre semana", HabitDates.label(setOf(1, 2, 3, 4, 5)))
         assertEquals("L X V", HabitDates.label(setOf(5, 1, 3)))
     }
+
+    @Test fun diasProgramados() {
+        val weekdays = habit(setOf(1, 2, 3, 4, 5))
+        assertEquals(false, weekdays.scheduledOn(sat))                          // sábado no toca
+        assertEquals(true, weekdays.scheduledOn(HabitDates.parse("2026-11-09")))  // lunes sí
+        assertEquals(true, habit().scheduledOn(sat))                            // sin días = todos
+    }
+
+    @Test fun hechoUnDiaQueNoTocabaSuma() {
+        // Solo entre semana, pero también lo hizo el sábado 31 oct y el domingo 1 nov
+        val h = habit(setOf(1, 2, 3, 4, 5), "2026-10-30", "2026-10-31", "2026-11-01", "2026-11-02")
+        assertEquals(4, h.streak(HabitDates.parse("2026-11-02")))
+    }
+
+    @Test fun etiquetaDeMeta() {
+        assertEquals("10 páginas", habit().goalLabel)
+        assertEquals("10", habit().copy(unit = "").goalLabel)
+        assertEquals(null, habit().copy(goal = null).goalLabel)
+    }
+
+    @Test fun sinNingunDiaHechoRachaCero() {
+        assertEquals(0, habit().streak(sat))
+        assertEquals(0, habit().bestStreak(sat))
+    }
 }
