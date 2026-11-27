@@ -14,3 +14,4 @@ Esperado: cada botón con área mínima de toque de 44dp (`KtpjDimens.minTouchTa
 Obtenido: `SmallChip` usa `heightIn(min = 32.dp)` y 8dp/6dp de separación. Los chips van dentro de la columna que abre **Editar tarea** al tocarla, así que un toque que falla por poco abre el formulario de edición en vez de cambiar la fecha (riesgo para KTP-13-19). "Todas a hoy" está dentro del encabezado que abre/cierra la sección: fallar el toque cierra Anteriores.
 Sugerencia: dejar el área clicable en 44dp y conservar la píldora visual de 32dp (padding exterior, o `minimumInteractiveComponentSize()`).
 Caso: KTP-13-28 (y -19, -27)  ·  Prueba: manual (no se puede en JVM)  ·  Rama/commit: ktp-13-fecha-anteriores / de0508e
+Corregido en 7ba3a38: área de toque de 44dp (píldora visual de 32dp) en Hoy · Mañana · 📅 Otra y Todas a hoy; los toques en la fila de chips no llegan a "Editar tarea" ni al encabezado.
