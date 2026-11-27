@@ -109,6 +109,7 @@ object SpurTasks {
 
     /** Revisión periódica (15 min es el mínimo de Android) con red disponible. */
     fun schedule(ctx: Context) {
+        if (BuildConfig.IS_QA) return   // app de pruebas: sin revisión en segundo plano ni recordatorios
         val request = PeriodicWorkRequestBuilder<SyncWorker>(15, TimeUnit.MINUTES)
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .build()

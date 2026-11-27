@@ -98,6 +98,7 @@ object DailySummary {
 
     /** Arma (o rearma) las dos alarmas. Idempotente: se llama al abrir la app y en cada sync. */
     fun arm(ctx: Context) {
+        if (BuildConfig.IS_QA) return   // app de pruebas: sin resumen diario (ya lo manda Spur)
         val am = ctx.getSystemService(AlarmManager::class.java) ?: return
         Kind.entries.forEach { kind ->
             am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, nextAt(kind.hour), firePending(ctx, kind))

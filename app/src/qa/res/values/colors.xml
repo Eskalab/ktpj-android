@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Ícono morado para no confundir la app de pruebas con Spur -->
+    <color name="spur_icon_bg">#6B2FBF</color>
+</resources>

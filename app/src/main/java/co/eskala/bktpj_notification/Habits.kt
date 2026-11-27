@@ -170,6 +170,7 @@ object Habits {
     // ── Aviso: una vez al día, desde la hora elegida, solo si toca hoy y no se ha hecho ──
 
     private fun remind(ctx: Context, list: List<Habit>) {
+        if (BuildConfig.IS_QA) return   // app de pruebas: no avisa hábitos (ya lo hace Spur)
         val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
         val today = HabitDates.today()
         val sp = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)

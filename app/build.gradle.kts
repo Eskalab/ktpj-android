@@ -25,11 +25,22 @@ android {
         buildConfigField("String", "NEON_USER", "\"${localProps["neon.user"] ?: ""}\"")
         buildConfigField("String", "NEON_PASS", "\"${localProps["neon.pass"] ?: ""}\"")
         buildConfigField("String", "NEON_DB",   "\"${localProps["neon.db"]   ?: "neondb"}\"")
+        buildConfigField("Boolean", "IS_QA", "false")
+        manifestPlaceholders["appLabel"] = "Spur"
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
+        }
+        // App de pruebas: se instala al lado de Spur (otro paquete), sin avisos ni resúmenes en segundo plano.
+        create("qa") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".qa"
+            versionNameSuffix = "-qa"
+            manifestPlaceholders["appLabel"] = "Spur QA"
+            buildConfigField("Boolean", "IS_QA", "true")
+            matchingFallbacks += listOf("debug")
         }
     }
 
