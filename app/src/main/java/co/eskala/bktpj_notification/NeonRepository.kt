@@ -49,9 +49,10 @@ object NeonRepository {
                 if (resp.isSuccessful) Result.success(JSONObject(respBody))
                 else Result.failure(Exception(neonError(resp.code, respBody)))
             } catch (e: SocketTimeoutException) {
-                Result.failure(Exception("Timeout al conectar con Neon"))
+                Result.failure(Exception("Timeout al conectar con Neon", e))
             } catch (e: Throwable) {
-                Result.failure(Exception(e.message ?: e.toString()))
+                // La causa se conserva: OfflineSync distingue "sin red" (IOException) de un error de la base.
+                Result.failure(Exception(e.message ?: e.toString(), e))
             }
         }
 
@@ -277,8 +278,8 @@ object NeonRepository {
         app: String? = null,
         projectId: String? = null,
         pomos: Int? = null,
+        id: String = UUID.randomUUID().toString(),   // KTP-8: la cola sin conexión manda su propio id (reintento sin duplicar)
     ): Result<String> {
-        val id = UUID.randomUUID().toString()
         return sql(
             ctx,
             """WITH next_ord AS (SELECT COALESCE(MAX("order"), -1) + 1 AS n FROM cards WHERE column_id = 'spur_col_todo')
@@ -288,31 +289,35 @@ object NeonRepository {
                SELECT $1, $2, $3, n, $4::"Priority",
                       array_remove(ARRAY['app:' || $7::text, 'pomos:' || $9::text], NULL), 'spur_col_todo', $5, 'spur_app', 'spur', $6::timestamp,
                       'NONE', '{}', false, false, false, NOW(), $8
-               FROM next_ord""",
+               FROM next_ord
+               ON CONFLICT DO NOTHING""",
             listOf(id, title, description, if (high) "HIGH" else "MEDIUM", "spur_$id", due, app, projectId, pomos?.toString()),
-        ).mapCatching { assignKey(ctx, id, projectId).getOrThrow(); id }
+        ).mapCatching { assignKey(ctx, id, projectId, onlyIfMissing = true).getOrThrow(); id }
     }
 
     /**
      * Da a la tarjeta su ID tipo Jira: siguiente número de la épica (LAV-4) o, sin épica o si la épica
      * no tiene prefijo, del tablero Spur (SP-12). Los números no se reutilizan (contadores en la base).
      */
-    suspend fun assignKey(ctx: Context, cardId: String, projectId: String?): Result<String?> =
+    suspend fun assignKey(ctx: Context, cardId: String, projectId: String?, onlyIfMissing: Boolean = false): Result<String?> =
         sql(
             ctx,
-            """WITH pr AS (
+            // onlyIfMissing (KTP-8): si la tarjeta ya tiene ID (reintento de una creación) no se gasta otro número.
+            """WITH skip AS (
+                 SELECT 1 FROM cards WHERE id = $1 AND key IS NOT NULL AND $3::boolean
+               ), pr AS (
                  UPDATE projects SET key_seq = key_seq + 1
-                 WHERE id = $2 AND prefix IS NOT NULL
+                 WHERE id = $2 AND prefix IS NOT NULL AND NOT EXISTS (SELECT 1 FROM skip)
                  RETURNING prefix || '-' || key_seq AS k
                ), bd AS (
                  UPDATE boards SET card_count = card_count + 1
-                 WHERE id = 'spur_board' AND NOT EXISTS (SELECT 1 FROM pr)
+                 WHERE id = 'spur_board' AND NOT EXISTS (SELECT 1 FROM pr) AND NOT EXISTS (SELECT 1 FROM skip)
                  RETURNING COALESCE(NULLIF(prefix, ''), 'SP') || '-' || card_count AS k
                )
-               UPDATE cards SET key = COALESCE((SELECT k FROM pr), (SELECT k FROM bd))
+               UPDATE cards SET key = COALESCE((SELECT k FROM pr), (SELECT k FROM bd), key)
                WHERE id = $1
                RETURNING key""",
-            listOf(cardId, projectId),
+            listOf(cardId, projectId, onlyIfMissing),
         ).map { obj -> obj.getJSONArray("rows").optJSONObject(0)?.str("key") }
 
     /** En curso (true) o de vuelta a pendiente (false). */

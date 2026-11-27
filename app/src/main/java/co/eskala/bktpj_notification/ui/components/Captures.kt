@@ -43,7 +43,11 @@ fun Capture.kindLabel(): String = when {
     else -> tx.type
 }
 
-private fun shortError(e: String) = if (e.contains("timeout", ignoreCase = true)) "timeout" else "error"
+private fun shortError(e: String) = when {
+    e.startsWith("Sin conexión") -> "sin red · se sube sola"   // KTP-8: en cola, se reintenta al volver la red
+    e.contains("timeout", ignoreCase = true) -> "timeout"
+    else -> "error"
+}
 
 /** Color del monto: abonos en green, el resto en fg. */
 @Composable
